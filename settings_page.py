@@ -169,6 +169,9 @@ class SettingsPage(QWidget):
         self.table.setMinimumHeight(100)
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.splitter.addWidget(self.table)
+        ui_kit.install_empty_state(self.table, lambda: ui_kit.device_empty_text(
+            self.controller.serial, self.controller.device_state, self.table, self.status_label.text(), "暂无设置项 · 点击「刷新名称和值」读取"),
+            self.controller.changed)
 
         detail_scroll = QScrollArea()
         detail_scroll.setWidgetResizable(True)

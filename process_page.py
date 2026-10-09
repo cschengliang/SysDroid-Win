@@ -201,6 +201,9 @@ class ProcessPage(QWidget):
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.table.itemDoubleClicked.connect(lambda _item: self._load_details())
         self.splitter.addWidget(self.table)
+        ui_kit.install_empty_state(self.table, lambda: ui_kit.device_empty_text(
+            self.controller.serial, self.controller.device_state, self.table, self.status_label.text(), "等待首次采样"),
+            self.controller.changed)
         detail_scroll = QScrollArea()
         detail_scroll.setWidgetResizable(True)
         detail_scroll.setFrameShape(QScrollArea.Shape.NoFrame)

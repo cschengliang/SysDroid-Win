@@ -284,6 +284,7 @@ class CommandLibraryPage(QWidget):
         self.table.itemChanged.connect(self._library_item_changed)
         self.table.cellDoubleClicked.connect(lambda row, col: self.open_execution(self.table.item(row, 1).data(Qt.ItemDataRole.UserRole)) if col else None)
         layout.addWidget(self.table, 1)
+        ui_kit.install_empty_state(self.table, lambda: "没有可显示的命令\n调整搜索、分类或「仅收藏」筛选，或点击「新建命令」")
         bottom = QHBoxLayout()
         self.selection_label = _note("选择命令后可执行；双击名称打开参数预览。")
         bottom.addWidget(self.selection_label, 1)
@@ -402,6 +403,7 @@ class CommandLibraryPage(QWidget):
         self.management_table.itemChanged.connect(self._management_item_changed)
         self.management_table.cellDoubleClicked.connect(self._edit_managed_row)
         layout.addWidget(self.management_table, 1)
+        ui_kit.install_empty_state(self.management_table, lambda: "没有匹配的命令\n调整搜索词，或点击「新建命令」")
         actions = QHBoxLayout()
         self.management_new_button = _button("新建命令", lambda: self.edit_command(), actions)
         self.management_edit_button = _button("编辑所选", lambda: self.edit_command(self._managed_id()), actions)
@@ -430,6 +432,7 @@ class CommandLibraryPage(QWidget):
         self.history_table.cellDoubleClicked.connect(lambda row, col: self._show_history_output())
         self.history_table.itemSelectionChanged.connect(self._history_selection_changed)
         layout.addWidget(self.history_table, 1)
+        ui_kit.install_empty_state(self.history_table, lambda: "暂无执行历史\n在命令库执行命令后会显示在这里")
         self.tabs.addTab(page, "执行历史")
 
     def set_runtime_error(self, message: str) -> None:

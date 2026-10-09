@@ -171,6 +171,9 @@ class PropPage(QWidget):
         self.table.setMinimumWidth(250)
         self.table.itemSelectionChanged.connect(self._selection_changed)
         splitter.addWidget(self.table)
+        ui_kit.install_empty_state(self.table, lambda: ui_kit.device_empty_text(
+            self.controller.serial, self.controller.device_state, self.table, self.status_label.text(), "暂无属性 · 点击「刷新属性」读取"),
+            self.controller.changed)
 
         editor_scroll = QScrollArea()
         self.editor_scroll = editor_scroll

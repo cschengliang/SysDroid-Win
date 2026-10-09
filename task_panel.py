@@ -55,6 +55,7 @@ class TaskPanel(QTabWidget):
         self.table.itemSelectionChanged.connect(self._select_row)
         self.table.cellDoubleClicked.connect(lambda row, col: self.show_task(self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)))
         tasks_layout.addWidget(self.table)
+        ui_kit.install_empty_state(self.table, lambda: "暂无任务\n执行命令、刷新设备或启动投屏后会显示在这里")
         self.addTab(tasks_page, "活动任务")
         output_page = QWidget()
         output_layout = ui_kit.page_layout(QVBoxLayout(output_page), 8, 6)

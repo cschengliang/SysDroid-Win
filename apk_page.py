@@ -76,6 +76,9 @@ class ApkPage(QWidget):
         for column, width in enumerate((225, 90, 100, 90, 75, 150, 240)):
             self.table.setColumnWidth(column, width)
         self.splitter.addWidget(self.table)
+        ui_kit.install_empty_state(self.table, lambda: ui_kit.device_empty_text(
+            self.controller.serial, self.controller.device_state, self.table, self.status.text(), "暂无应用包 · 选择用户后点击「刷新」"),
+            self.controller.changed)
         self.tabs = QTabWidget()
         self.basic = QTextEdit()
         self.permissions = QTextEdit()
