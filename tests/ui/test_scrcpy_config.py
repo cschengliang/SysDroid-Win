@@ -75,3 +75,47 @@ def test_encoder_list_distinguishes_empty_audio_support_from_incomplete_output()
 def test_invalid_encoder_output_is_not_reported_as_supported_or_empty(output):
     with pytest.raises(ValueError):
         parse_encoder_list(output)
+
+
+def test_scrcpy5_display_and_device_options_use_documented_flags():
+    config = ScrcpyConfig(new_display=True, new_display_spec="1920x1080/420", crop="1224:1440:0:0",
+                          start_app="+?firefox", turn_screen_off=True, stay_awake=True,
+                          show_touches=True, keyboard_uhid=True)
+    args = build_scrcpy_args("serial", config)
+    for flag in ("--new-display=1920x1080/420", "--crop=1224:1440:0:0", "--start-app=+?firefox",
+                 "--turn-screen-off", "--stay-awake", "--show-touches", "--keyboard=uhid"):
+        assert flag in args
+    assert "--new-display" in build_scrcpy_args("serial", ScrcpyConfig(new_display=True))
+    assert "--display-id=2" in build_scrcpy_args("serial", ScrcpyConfig(display_id=2))
+    assert not any(arg.startswith("--display-id") for arg in build_scrcpy_args("serial", ScrcpyConfig()))
+
+
+def test_camera_source_rejects_display_only_options_and_skips_keyboard():
+    args = build_scrcpy_args("serial", ScrcpyConfig(video_source="camera", camera_facing="front", keyboard_uhid=True))
+    assert "--video-source=camera" in args and "--camera-facing=front" in args
+    assert "--keyboard=uhid" not in args
+    for bad in (dict(display_id=1), dict(new_display=True), dict(crop="100:100:0:0")):
+        with pytest.raises(ValueError, match="摄像头"):
+            build_scrcpy_args("serial", ScrcpyConfig(video_source="camera", **bad))
+    with pytest.raises(ValueError, match="显示屏 ID"):
+        build_scrcpy_args("serial", ScrcpyConfig(new_display=True, display_id=1))
+
+
+@pytest.mark.parametrize("field,value,message", [
+    ("crop", "100x100", "裁剪"), ("new_display_spec", "big", "虚拟显示屏"),
+    ("start_app", "?", "启动应用"), ("start_app", "pkg\nother", "启动应用"),
+])
+def test_invalid_scrcpy5_values_are_rejected(field, value, message):
+    config = ScrcpyConfig(new_display=field == "new_display_spec", **{field: value})
+    with pytest.raises(ValueError, match=message):
+        build_scrcpy_args("serial", config)
+
+
+def test_control_dependent_options_follow_scrcpy_control_rules():
+    options = dict(turn_screen_off=True, stay_awake=True, show_touches=True, start_app="com.example", keyboard_uhid=True)
+    no_control = build_scrcpy_args("serial", ScrcpyConfig(control_enabled=False, **options))
+    assert "--no-control" in no_control
+    assert not {"--turn-screen-off", "--stay-awake", "--show-touches", "--start-app=com.example", "--keyboard=uhid"}.intersection(no_control)
+    record_only = build_scrcpy_args("serial", ScrcpyConfig(record_enabled=True, record_mode="only", record_path="x.mp4", **options))
+    assert "--turn-screen-off" in record_only and "--start-app=com.example" in record_only
+    assert "--keyboard=uhid" not in record_only

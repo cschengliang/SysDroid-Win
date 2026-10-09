@@ -52,10 +52,26 @@ class ScrcpyConfig:
     record_path: str = "scrcpy-recording.mp4"
     record_format: str = "mp4"
     record_mode: str = "mirror"
+    video_source: str = "display"
+    camera_facing: str = "back"
+    display_id: int = 0
+    new_display: bool = False
+    new_display_spec: str = ""
+    crop: str = ""
+    start_app: str = ""
+    turn_screen_off: bool = False
+    stay_awake: bool = False
+    show_touches: bool = False
+    keyboard_uhid: bool = False
 
     @property
     def record_only(self) -> bool:
         return self.record_enabled and self.record_mode == "only"
+
+    @property
+    def device_control(self) -> bool:
+        """Scrcpy keeps control enabled in record-only mode (no --no-control)."""
+        return self.record_only or self.control_enabled
 
 
 def build_scrcpy_args(serial: str, config: ScrcpyConfig) -> list[str]:
@@ -86,6 +102,28 @@ def build_scrcpy_args(serial: str, config: ScrcpyConfig) -> list[str]:
             raise ValueError("启用录制后需要填写有效的输出文件。")
         if config.record_format not in ("mp4", "mkv") or config.record_mode not in ("mirror", "only"):
             raise ValueError("录制格式或模式无效。")
+    camera = config.video_source == "camera"
+    if config.video_source not in ("display", "camera"):
+        raise ValueError("视频来源的取值无效。")
+    if not isinstance(config.display_id, int) or not 0 <= config.display_id <= 9999:
+        raise ValueError("显示屏 ID 必须在 0–9999 之间。")
+    crop = config.crop.strip()
+    new_display_spec = config.new_display_spec.strip()
+    start_app = config.start_app.strip()
+    if camera:
+        if config.camera_facing not in ("back", "front", "external"):
+            raise ValueError("摄像头朝向的取值无效。")
+        if config.display_id or config.new_display or crop:
+            raise ValueError("摄像头来源不能同时使用显示屏 ID、新建虚拟显示屏或裁剪。")
+    if config.new_display:
+        if config.display_id:
+            raise ValueError("新建虚拟显示屏时不能同时指定显示屏 ID。")
+        if not re.fullmatch(r"(?:\d{2,5}x\d{2,5})?(?:/\d{2,4})?", new_display_spec):
+            raise ValueError("虚拟显示屏参数格式应为 宽x高、宽x高/DPI 或 /DPI，留空使用主屏尺寸。")
+    if crop and not re.fullmatch(r"\d{1,5}:\d{1,5}:\d{1,5}:\d{1,5}", crop):
+        raise ValueError("裁剪区域格式应为 宽:高:X:Y（设备自然方向的像素）。")
+    if start_app and (re.search(r"[\0\r\n]", start_app) or not re.fullmatch(r"\+?\??[^\s+?].*", start_app)):
+        raise ValueError("启动应用应填写包名；前缀 + 表示先强制停止，? 表示按应用名称匹配。")
 
     args = [f"--serial={serial}"]
     if config.max_size:
@@ -93,6 +131,14 @@ def build_scrcpy_args(serial: str, config: ScrcpyConfig) -> list[str]:
     if config.max_fps:
         args.append(f"--max-fps={config.max_fps}")
     args.extend((f"--video-bit-rate={config.video_bitrate}M", f"--video-codec={config.video_codec}"))
+    if camera:
+        args.extend(("--video-source=camera", f"--camera-facing={config.camera_facing}"))
+    elif config.new_display:
+        args.append("--new-display" + (f"={new_display_spec}" if new_display_spec else ""))
+    elif config.display_id:
+        args.append(f"--display-id={config.display_id}")
+    if crop and not camera:
+        args.append(f"--crop={crop}")
     if config.video_buffer:
         args.append(f"--video-buffer={config.video_buffer}")
     if config.orientation and not config.record_only:
@@ -111,6 +157,15 @@ def build_scrcpy_args(serial: str, config: ScrcpyConfig) -> list[str]:
         for enabled, flag in ((config.always_on_top, "--always-on-top"), (config.fullscreen, "--fullscreen"), (config.borderless, "--window-borderless")):
             if enabled:
                 args.append(flag)
+        if config.control_enabled and config.keyboard_uhid and not camera:
+            args.append("--keyboard=uhid")
+    if config.device_control:
+        # Scrcpy rejects these when control is disabled (--no-control).
+        for enabled, flag in ((config.turn_screen_off, "--turn-screen-off"), (config.stay_awake, "--stay-awake"), (config.show_touches, "--show-touches")):
+            if enabled:
+                args.append(flag)
+        if start_app:
+            args.append(f"--start-app={start_app}")
     if config.record_enabled:
         args.extend((f"--record={config.record_path}", f"--record-format={config.record_format}"))
     return args
@@ -179,6 +234,11 @@ class ScrcpyPage(QWidget):
         "smooth": (720, 60, 4, False),
         "quality": (1920, 60, 16, True),
     }
+
+    COMBO_FIELDS = ("max_size", "max_fps", "video_codec", "orientation", "audio_source", "record_format", "record_mode", "video_source", "camera_facing")
+    SPIN_FIELDS = ("video_bitrate", "video_buffer", "audio_bitrate", "audio_buffer", "display_id")
+    CHECK_FIELDS = ("audio_enabled", "control_enabled", "clipboard_sync", "always_on_top", "fullscreen", "borderless", "record_enabled",
+                    "new_display", "turn_screen_off", "stay_awake", "show_touches", "keyboard_uhid")
 
     def __init__(self, runner: TaskRunner, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -408,8 +468,51 @@ class ScrcpyPage(QWidget):
         record_layout.addWidget(ui_kit.info_note("启动前检查目录可写并确认覆盖；强制结束可能损坏录制文件。", "支持包含空格、单引号和 $ 的文件名。启动前检查目录可写并确认覆盖现有文件；不会创建目录。正常结束有助于完成文件封装，强制结束可能损坏录制。相对路径基于应用当前工作目录。"))
         record_layout.addStretch()
         control_layout.addWidget(record_group, 1)
-        self._panel_layouts = (session_panels, media_layout, control_layout)
-        for form in (device_form, profile_form, video_form, audio_form, record_form):
+
+        source = self._tab_body("画面来源与设备")
+        source_layout = QHBoxLayout(source)
+        source_group = QGroupBox("画面来源 · 显示屏或摄像头")
+        source_box = QVBoxLayout(source_group)
+        source_form = QFormLayout()
+        self.video_source = self._combo((("设备显示屏", "display"), ("设备摄像头（Android 12+）", "camera")))
+        self.camera_facing = self._combo((("后置摄像头", "back"), ("前置摄像头", "front"), ("外接摄像头", "external")))
+        self.display_id = self._spin(0, 9999)
+        self.display_id.setSpecialValueText("主显示屏（0）")
+        self.new_display = QCheckBox("新建虚拟显示屏（--new-display）")
+        self.new_display_spec = QLineEdit()
+        self.new_display_spec.setPlaceholderText("留空=主屏尺寸；例如 1920x1080/420 或 /240")
+        self.crop = QLineEdit()
+        self.crop.setPlaceholderText("宽:高:X:Y，例如 1224:1440:0:0；留空不裁剪")
+        for title, widget in (("视频来源", self.video_source), ("摄像头朝向", self.camera_facing), ("显示屏 ID", self.display_id), ("", self.new_display), ("虚拟显示屏参数", self.new_display_spec), ("裁剪区域", self.crop)):
+            source_form.addRow(title, widget)
+        source_box.addLayout(source_form)
+        source_box.addWidget(ui_kit.info_note("摄像头来源不支持显示屏 ID、虚拟显示屏和裁剪。", "显示屏 ID 可通过 scrcpy --list-displays 查看。新建虚拟显示屏与显示屏 ID 互斥。裁剪按设备自然方向（手机通常为竖屏）计算。摄像头来源需要 Android 12+，且不转发键鼠输入。"))
+        source_box.addStretch()
+        source_layout.addWidget(source_group, 1)
+        behavior_group = QGroupBox("设备行为 · 需要启用控制")
+        behavior_box = QVBoxLayout(behavior_group)
+        self.behavior_settings = QWidget()
+        behavior_checks = QVBoxLayout(self.behavior_settings)
+        behavior_checks.setContentsMargins(0, 0, 0, 0)
+        self.turn_screen_off = QCheckBox("启动后关闭设备屏幕（--turn-screen-off）")
+        self.stay_awake = QCheckBox("插电时保持唤醒（--stay-awake）")
+        self.show_touches = QCheckBox("显示触摸点（--show-touches）")
+        self.keyboard_uhid = QCheckBox("模拟物理键盘 UHID（--keyboard=uhid）")
+        for widget in (self.turn_screen_off, self.stay_awake, self.show_touches, self.keyboard_uhid):
+            behavior_checks.addWidget(widget)
+        start_form = QFormLayout()
+        start_form.setContentsMargins(0, 0, 0, 0)
+        self.start_app = QLineEdit()
+        self.start_app.setPlaceholderText("包名，例如 com.android.settings；+ 前缀先强停，? 前缀按名称")
+        start_form.addRow("启动应用", self.start_app)
+        behavior_checks.addLayout(start_form)
+        behavior_box.addWidget(self.behavior_settings)
+        behavior_box.addWidget(ui_kit.info_note("关闭控制时这些选项不会生效；退出时 Scrcpy 会恢复触摸点和唤醒设置。", "Scrcpy 在关闭控制（--no-control）时拒绝这些选项，因此本页会自动省略。仅录制模式仍保留控制，可配合关闭屏幕使用。UHID 键盘仅在窗口投屏且启用控制时生效。"))
+        behavior_box.addStretch()
+        source_layout.addWidget(behavior_group, 1)
+
+        self._panel_layouts = (session_panels, media_layout, control_layout, source_layout)
+        for form in (device_form, profile_form, video_form, audio_form, record_form, source_form, start_form):
             form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
             form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
@@ -455,13 +558,15 @@ class ScrcpyPage(QWidget):
         for widget in (self.video_bitrate, self.video_buffer):
             widget.valueChanged.connect(self._profile_setting_changed)
         self.audio_enabled.toggled.connect(self._profile_setting_changed)
-        for widget in (self.orientation, self.audio_source, self.record_mode):
+        for widget in (self.orientation, self.audio_source, self.record_mode, self.video_source, self.camera_facing):
             widget.currentIndexChanged.connect(self._config_changed)
-        for widget in (self.audio_bitrate, self.audio_buffer):
+        for widget in (self.audio_bitrate, self.audio_buffer, self.display_id):
             widget.valueChanged.connect(self._config_changed)
-        for widget in (self.control_enabled, self.clipboard_sync, self.always_on_top, self.fullscreen, self.borderless, self.record_enabled):
+        for widget in (self.control_enabled, self.clipboard_sync, self.always_on_top, self.fullscreen, self.borderless, self.record_enabled,
+                       self.new_display, self.turn_screen_off, self.stay_awake, self.show_touches, self.keyboard_uhid):
             widget.toggled.connect(self._config_changed)
-        self.record_path.textChanged.connect(self._config_changed)
+        for widget in (self.record_path, self.new_display_spec, self.crop, self.start_app):
+            widget.textChanged.connect(self._config_changed)
         self.record_format.currentIndexChanged.connect(self._record_format_changed)
 
     def set_device(self, serial: str, state: str = "device", model: str = "") -> None:
@@ -573,6 +678,11 @@ class ScrcpyPage(QWidget):
             borderless=self.borderless.isChecked(), record_enabled=self.record_enabled.isChecked(),
             record_path=self.record_path.text(), record_format=self.record_format.currentData(),
             record_mode=self.record_mode.currentData(),
+            video_source=self.video_source.currentData(), camera_facing=self.camera_facing.currentData(),
+            display_id=self.display_id.value(), new_display=self.new_display.isChecked(),
+            new_display_spec=self.new_display_spec.text(), crop=self.crop.text(), start_app=self.start_app.text(),
+            turn_screen_off=self.turn_screen_off.isChecked(), stay_awake=self.stay_awake.isChecked(),
+            show_touches=self.show_touches.isChecked(), keyboard_uhid=self.keyboard_uhid.isChecked(),
         )
 
     def build_args(self) -> list[str]:
@@ -582,13 +692,15 @@ class ScrcpyPage(QWidget):
         defaults = ScrcpyConfig()
         self._updating = True
         try:
-            for name in ("max_size", "max_fps", "video_codec", "orientation", "audio_source", "record_format", "record_mode"):
+            for name in self.COMBO_FIELDS:
                 widget = getattr(self, name)
                 widget.setCurrentIndex(widget.findData(getattr(defaults, name)))
-            for name in ("video_bitrate", "video_buffer", "audio_bitrate", "audio_buffer"):
+            for name in self.SPIN_FIELDS:
                 getattr(self, name).setValue(getattr(defaults, name))
-            for name in ("audio_enabled", "control_enabled", "clipboard_sync", "always_on_top", "fullscreen", "borderless", "record_enabled"):
+            for name in self.CHECK_FIELDS:
                 getattr(self, name).setChecked(getattr(defaults, name))
+            for name in ("new_display_spec", "crop", "start_app"):
+                getattr(self, name).setText(getattr(defaults, name))
             movies = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.MoviesLocation)
             self.record_path.setText(str(Path(movies) / defaults.record_path))
             self.profile.setCurrentIndex(self.profile.findData("balanced"))
@@ -645,6 +757,14 @@ class ScrcpyPage(QWidget):
         self.window_settings.setEnabled(not config.record_only)
         self.orientation.setEnabled(not config.record_only)
         self.clipboard_sync.setEnabled(config.control_enabled and not config.record_only)
+        camera = config.video_source == "camera"
+        self.camera_facing.setEnabled(camera)
+        self.display_id.setEnabled(not camera and not config.new_display)
+        self.new_display.setEnabled(not camera)
+        self.new_display_spec.setEnabled(not camera and config.new_display)
+        self.crop.setEnabled(not camera)
+        self.behavior_settings.setEnabled(config.device_control)
+        self.keyboard_uhid.setEnabled(config.control_enabled and not config.record_only and not camera)
         self.summary_labels["size"].setText(f"{config.max_size} px" if config.max_size else "不限制")
         self.summary_labels["fps"].setText(f"{config.max_fps} FPS" if config.max_fps else "不限制")
         self.summary_labels["bitrate"].setText(f"{config.video_bitrate} Mbps")
