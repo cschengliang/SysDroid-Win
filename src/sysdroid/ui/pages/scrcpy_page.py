@@ -77,7 +77,7 @@ class ScrcpyConfig:
         return self.record_only or self.control_enabled
 
 
-def build_scrcpy_args(serial: str, config: ScrcpyConfig) -> list[str]:
+def build_scrcpy_args(serial: str, config: ScrcpyConfig, window_title: str = "") -> list[str]:
     """Return literal argv; PowerShell quoting belongs only in the preview."""
     if not serial or not serial.strip():
         raise ValueError("请先在顶部选择在线设备。")
@@ -162,6 +162,8 @@ def build_scrcpy_args(serial: str, config: ScrcpyConfig) -> list[str]:
                 args.append(flag)
         if config.control_enabled and config.keyboard_uhid and not camera:
             args.append("--keyboard=uhid")
+        if window_title.strip() and "\0" not in window_title:
+            args.append(f"--window-title={window_title.strip()}")
     if config.device_control:
         # Scrcpy rejects these when control is disabled (--no-control).
         for enabled, flag in ((config.turn_screen_off, "--turn-screen-off"), (config.stay_awake, "--stay-awake"), (config.show_touches, "--show-touches")):
@@ -254,7 +256,7 @@ def parse_encoder_list(output: str) -> dict[str, dict[str, list[str]]]:
 
 
 class ScrcpyPage(QWidget):
-    """Configure one external Scrcpy process; settings affect the next launch."""
+    """Configure external Scrcpy processes, at most one running session per device."""
 
     show_output = Signal(str)
 
@@ -287,8 +289,10 @@ class ScrcpyPage(QWidget):
         self._scrcpy_program = ""
         self._adb_program = ""
         self._tool_error = ""
-        self._active_task_id = ""
-        self.last_task_id = ""
+        # serial -> running session task; serial -> latest session task (for output).
+        self._sessions: dict[str, str] = {}
+        self._last_by_serial: dict[str, str] = {}
+        self._session_configs: dict[str, ScrcpyConfig] = {}
         self._encoder_task_id = ""
         self._active = False
         self._generation = 0
@@ -301,7 +305,6 @@ class ScrcpyPage(QWidget):
         self._output_timer.setSingleShot(True)
         self._output_timer.setInterval(50)
         self._output_timer.timeout.connect(self._flush_output)
-        self.session_config: ScrcpyConfig | None = None
         self._build_ui()
         self.runner.task_changed.connect(self._task_changed)
         self.runner.task_finished.connect(self._task_finished)
@@ -316,7 +319,23 @@ class ScrcpyPage(QWidget):
 
     @property
     def active_task_id(self) -> str:
-        return self._active_task_id
+        """Running session of the selected device."""
+        return self._sessions.get(self._serial, "")
+
+    @property
+    def last_task_id(self) -> str:
+        return self._last_by_serial.get(self._serial, "")
+
+    @property
+    def session_config(self) -> ScrcpyConfig | None:
+        return self._session_configs.get(self.last_task_id)
+
+    def running_sessions(self) -> dict[str, str]:
+        return dict(self._sessions)
+
+    def window_title(self, serial: str | None = None) -> str:
+        serial = self._serial if serial is None else serial
+        return f"{self._model} · {serial}" if self._model else serial
 
     @staticmethod
     def _combo(items: tuple[tuple[str, object], ...]) -> QComboBox:
@@ -361,12 +380,15 @@ class ScrcpyPage(QWidget):
         self.start_button = QPushButton("启动独立窗口")
         self.stop_button = QPushButton("停止")
         self.force_stop_button = QPushButton("强制结束")
+        self.stop_all_button = QPushButton("停止全部")
+        self.stop_all_button.setToolTip("停止所有设备上正在运行的 Scrcpy 会话")
         self.reset_button = QPushButton("恢复默认")
         self.start_button.clicked.connect(self.start_session)
         self.stop_button.clicked.connect(self.stop_session)
         self.force_stop_button.clicked.connect(self.force_stop_session)
+        self.stop_all_button.clicked.connect(self.stop_all_sessions)
         self.reset_button.clicked.connect(self.reset_defaults)
-        for button in (self.start_button, self.stop_button, self.force_stop_button, self.reset_button):
+        for button in (self.start_button, self.stop_button, self.force_stop_button, self.stop_all_button, self.reset_button):
             toolbar.addWidget(button)
         layout.addLayout(toolbar)
         self.error_label = self._note("")
@@ -386,7 +408,7 @@ class ScrcpyPage(QWidget):
         layout.addWidget(self.tabs, 1)
         session = self._tab_body("投屏会话")
         session_layout = QVBoxLayout(session)
-        session_layout.addWidget(ui_kit.info_note("画面在 Scrcpy 独立窗口中显示；配置修改仅影响下一次启动。", "画面在 Scrcpy 原生独立窗口中显示，本工具只管理启动配置和进程，不内嵌设备画面。配置修改仅影响下一次启动。"))
+        session_layout.addWidget(ui_kit.info_note("画面在 Scrcpy 独立窗口中显示；配置修改仅影响下一次启动。", "画面在 Scrcpy 原生独立窗口中显示，本工具只管理启动配置和进程，不内嵌设备画面。配置修改仅影响下一次启动。每台设备可同时运行一个会话，切换顶部设备即可为另一台设备启动；窗口标题包含型号和序列号。"))
         session_panels = QHBoxLayout()
         device_group = QGroupBox("目标设备与会话")
         device_form = QFormLayout(device_group)
@@ -399,7 +421,9 @@ class ScrcpyPage(QWidget):
         self.supported_audio_label.setObjectName("supportedAudioCodecs")
         self.session_label = self._note("未运行")
         self.recording_label = self._note("未开始")
-        for label, widget in (("设备型号", self.device_model), ("设备序列号", self.device_serial), ("设备状态", self.device_state), ("支持的视频编码", self.supported_video_label), ("支持的音频编码", self.supported_audio_label), ("会话状态", self.session_label), ("录制状态", self.recording_label)):
+        self.sessions_label = self._note("无")
+        self.sessions_label.setObjectName("scrcpySessions")
+        for label, widget in (("设备型号", self.device_model), ("设备序列号", self.device_serial), ("设备状态", self.device_state), ("支持的视频编码", self.supported_video_label), ("支持的音频编码", self.supported_audio_label), ("会话状态", self.session_label), ("录制状态", self.recording_label), ("全部运行中会话", self.sessions_label)):
             device_form.addRow(label, widget)
         session_panels.addWidget(device_group, 1)
         profile_group = QGroupBox("快捷配置")
@@ -624,6 +648,7 @@ class ScrcpyPage(QWidget):
         self.device_serial.setText(serial or "—")
         self.device_model.setText(model or ("型号未知" if serial else "未选择设备"))
         self.device_state.setText({"device": "在线", "offline": "离线", "unauthorized": "未授权，请在设备上允许 USB 调试"}.get(state, state or "未选择设备") if serial else "未选择设备")
+        self._show_device_session()
         self._refresh_config()
         if changed:
             self._generation += 1
@@ -732,7 +757,7 @@ class ScrcpyPage(QWidget):
         )
 
     def build_args(self) -> list[str]:
-        return build_scrcpy_args(self._serial, self.current_config())
+        return build_scrcpy_args(self._serial, self.current_config(), self.window_title())
 
     def reset_defaults(self) -> None:
         defaults = ScrcpyConfig()
@@ -885,11 +910,13 @@ class ScrcpyPage(QWidget):
             self.command_note.setText("配置未完成，暂不能复制启动命令。")
             self.copy_button.setEnabled(False)
             valid = False
-        active = bool(self._active_task_id)
+        active = bool(self.active_task_id)
         self.start_button.setEnabled(valid and self._state == "device" and not active)
         self.stop_button.setEnabled(active)
         self.force_stop_button.setEnabled(active)
+        self.stop_all_button.setEnabled(bool(self._sessions))
         self.output_button.setEnabled(bool(self.last_task_id))
+        self._render_sessions()
 
     def detect_tools(self) -> bool:
         errors: list[str] = []
@@ -933,8 +960,8 @@ class ScrcpyPage(QWidget):
             self.command_note.setText("已复制 PowerShell 命令，未执行。")
 
     def start_session(self) -> Task | None:
-        if self._active_task_id:
-            self._set_error("已有 Scrcpy 会话，请先停止该会话。")
+        if self.active_task_id:
+            self._set_error("该设备已有运行中的 Scrcpy 会话，请先停止；其他设备可以同时启动会话。")
             return None
         if not self._serial or self._state != "device":
             self._set_error("请选择在线且已授权的设备；当前状态：" + (self._state or "未选择设备"))
@@ -946,7 +973,7 @@ class ScrcpyPage(QWidget):
         if config.record_enabled and config.record_timestamp and config.record_path.strip():
             config = replace(config, record_path=timestamped_recording_path(config.record_path, serial, self.now()))
         try:
-            args = build_scrcpy_args(serial, config)
+            args = build_scrcpy_args(serial, config, self.window_title(serial))
             if config.record_enabled:
                 output_path = validate_recording_path(config.record_path)
                 if output_path.exists():
@@ -967,9 +994,13 @@ class ScrcpyPage(QWidget):
         except (ValueError, OSError, RuntimeError) as exc:
             self._set_error(str(exc))
             return None
-        self.session_config = config
-        self.last_task_id = task.id
-        self._active_task_id = task.id if task.status not in TERMINAL_STATUSES else ""
+        self._session_configs[task.id] = config
+        previous = self._last_by_serial.get(serial)
+        if previous and previous not in self._sessions.values():
+            self._session_configs.pop(previous, None)
+        self._last_by_serial[serial] = task.id
+        if task.status not in TERMINAL_STATUSES:
+            self._sessions[serial] = task.id
         self._output_task = task
         self._rendered_output = {"stdout": None, "stderr": None}
         self._output_dirty.update(("stdout", "stderr"))
@@ -980,11 +1011,15 @@ class ScrcpyPage(QWidget):
         return task
 
     def stop_session(self) -> None:
-        if self._active_task_id:
-            self.runner.cancel(self._active_task_id)
+        if self.active_task_id:
+            self.runner.cancel(self.active_task_id)
+
+    def stop_all_sessions(self) -> None:
+        for task_id in tuple(self._sessions.values()):
+            self.runner.cancel(task_id)
 
     def force_stop_session(self) -> None:
-        if not self._active_task_id:
+        if not self.active_task_id:
             return
         answer = QMessageBox.warning(
             self, "强制结束 Scrcpy",
@@ -992,8 +1027,8 @@ class ScrcpyPage(QWidget):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
-        if answer == QMessageBox.StandardButton.Yes:
-            self.runner.cancel(self._active_task_id, force=True)
+        if answer == QMessageBox.StandardButton.Yes and self.active_task_id:
+            self.runner.cancel(self.active_task_id, force=True)
 
     def open_output(self) -> None:
         if self.last_task_id:
@@ -1005,11 +1040,38 @@ class ScrcpyPage(QWidget):
         self.error_label.setVisible(bool(text))
         self.error_scroll.setVisible(bool(text))
 
+    def _render_sessions(self) -> None:
+        if not self._sessions:
+            self.sessions_label.setText("无")
+            return
+        lines = []
+        for serial, task_id in self._sessions.items():
+            task = self.runner.tasks.get(task_id)
+            status = STATUS_LABELS.get(task.status, task.status) if task else "运行中"
+            lines.append(f"{serial} · {status}" + (" ← 当前设备" if serial == self._serial else ""))
+        self.sessions_label.setText("\n".join(lines))
+
+    def _show_device_session(self) -> None:
+        """Point status and output at the selected device's latest session."""
+        task = self.runner.tasks.get(self.last_task_id) if self.last_task_id else None
+        self._output_task = task
+        self._rendered_output = {"stdout": None, "stderr": None}
+        if task is None:
+            self.status_label.setText("未运行")
+            self.session_label.setText("未运行")
+            self.recording_label.setText("未开始")
+            for output in (self.stdout_output, self.stderr_output):
+                output.clear()
+            return
+        self._output_dirty.update(("stdout", "stderr"))
+        self._schedule_output()
+        self._render_task(task)
+
     def _render_task(self, task: Task) -> None:
         status = STATUS_LABELS.get(task.status, task.status)
         self.status_label.setText(status)
         self.session_label.setText(f"{status} · {task.serial}\n任务 {task.id}" + (f" · 退出码 {task.exit_code}" if task.exit_code is not None else ""))
-        config = self.session_config
+        config = self._session_configs.get(task.id)
         if config is None or not config.record_enabled:
             self.recording_label.setText("此会话未启用录制")
         else:
@@ -1027,15 +1089,19 @@ class ScrcpyPage(QWidget):
     def _task_changed(self, task: Task) -> None:
         if task.id == self.last_task_id:
             self._render_task(task)
+        if task.id in self._sessions.values():
+            self._render_sessions()
 
     def _task_finished(self, task: Task) -> None:
         if task.id == self._encoder_task_id:
             self._encoders_received(task)
             return
+        for serial, task_id in tuple(self._sessions.items()):
+            if task_id == task.id:
+                del self._sessions[serial]
         if task.id != self.last_task_id:
+            self._refresh_config()
             return
-        if task.id == self._active_task_id:
-            self._active_task_id = ""
         self._output_task = task
         self._output_dirty.update(("stdout", "stderr"))
         self._schedule_output()

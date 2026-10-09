@@ -175,3 +175,48 @@ def test_start_session_uses_timestamped_recording_path(runner, tmp_path, monkeyp
     assert page.start_session() is not None
     assert "--record=" + str(tmp_path / "cap-SER_1-20260102-030405.mp4") in started[0]
     assert page.record_path.text() == str(tmp_path / "cap.mp4")
+
+
+def test_window_title_is_only_added_for_windowed_sessions():
+    assert "--window-title=Pixel · A" in build_scrcpy_args("A", ScrcpyConfig(), "Pixel · A")
+    record_only = ScrcpyConfig(record_enabled=True, record_mode="only", record_path="x.mp4")
+    assert not any(arg.startswith("--window-title") for arg in build_scrcpy_args("A", record_only, "Pixel · A"))
+
+
+def test_page_runs_one_session_per_device_concurrently(runner, monkeypatch):
+    from sysdroid.core.backend import Task
+    page = ScrcpyPage(runner)
+    started: list[Task] = []
+    cancelled: list[str] = []
+
+    def start_process(title, program, args, *, serial="", **kw):
+        task = Task(id=f"t{len(started) + 1}", title=title, program=program, args=args, serial=serial)
+        task.status = "running"
+        runner.tasks[task.id] = task
+        started.append(task)
+        return task
+
+    monkeypatch.setattr(page, "detect_tools", lambda: True)
+    monkeypatch.setattr(runner, "start_process", start_process)
+    monkeypatch.setattr(runner, "cancel", lambda task_id, force=False: cancelled.append(task_id))
+    page.set_device("A", "device", "Pixel")
+    first = page.start_session()
+    assert "--window-title=Pixel · A" in first.args
+    assert page.start_session() is None and "已有运行中" in page.error_label.text()
+    assert not page.start_button.isEnabled() and page.stop_button.isEnabled()
+    page.set_device("B", "device", "Galaxy")
+    assert page.start_button.isEnabled() and not page.stop_button.isEnabled()
+    assert page.status_label.text() == "未运行"
+    second = page.start_session()
+    assert page.running_sessions() == {"A": first.id, "B": second.id}
+    assert "A · " in page.sessions_label.text() and "B · " in page.sessions_label.text()
+    page.stop_session()
+    assert cancelled == [second.id]
+    first.status = "succeeded"
+    first.exit_code = 0
+    page._task_finished(first)
+    assert page.running_sessions() == {"B": second.id}
+    page.set_device("A", "device", "Pixel")
+    assert page.last_task_id == first.id and page.start_button.isEnabled()
+    page.stop_all_sessions()
+    assert cancelled == [second.id, second.id]
