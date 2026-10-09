@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
   push:
     tags: ['v*']
+    branches: ['ci/**']   # CI experiments: build only, no release
 
 permissions:
   contents: write
@@ -124,6 +125,9 @@ jobs:
           # which PyInstaller would otherwise pick up. Keep only Windows system dirs.
           $sys = $env:SystemRoot
           $env:PATH = @((Join-Path $PWD $env:PY_DIR), "$sys\System32", "$sys", "$sys\System32\Wbem", "$sys\System32\WindowsPowerShell\v1.0") -join ';'
+          # pwsh 7's PSModulePath breaks Get-AuthenticodeSignature in the Windows PowerShell 5.1
+          # child the build uses to verify OS-signed DLLs (icu.dll, propsys.dll). Let 5.1 use its defaults.
+          Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue
           try {
             & "$env:PY_DIR\python.exe" -s build_android_toolbox.py
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
