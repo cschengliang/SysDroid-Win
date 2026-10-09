@@ -45,13 +45,33 @@ lib\python-3.14.8-embed-amd64\python.exe -s android_toolbox.py
 
 也可以直接双击项目根目录下的 `start_android_toolbox.bat` 启动。脚本会自动定位嵌入式 Python 和应用入口，并在启动文件缺失时给出错误提示。
 
+根目录的 `android_toolbox.py` 只是启动器：把 `src/` 加入 `sys.path` 后调用 `sysdroid.app.main()`。应用代码位于 `src/sysdroid/`（结构见下）。
+
+### 代码结构
+
+```text
+android_toolbox.py          # 源码启动器（供 bat、README 命令和 PyInstaller spec 使用）
+start_android_toolbox.bat   # 双击启动
+AndroidToolbox.spec         # PyInstaller 配置
+src/sysdroid/
+├─ app.py                   # main()：创建 QApplication、主题和主窗口
+├─ app_info.py              # 名称与版本
+├─ runtime_paths.py         # 自带 ADB / Scrcpy / Terminal 路径解析
+├─ core/                    # 不含界面的设备逻辑：backend（任务执行）、apks、commands、processes、props、settings、users
+└─ ui/                      # main_window、theme、kit（通用控件）、task_panel
+   └─ pages/                # 每个导航页一个模块
+scripts/                    # build_android_toolbox.py、portable_assets.py（构建与便携资源）
+docs/design/                # 设计文档与 HTML 布局原型
+tests/                      # core/、ui/、packaging/
+```
+
 桌面 Qt 程序提供“设备连接、ADB 命令库、系统属性、系统设置、应用包信息、进程监控、投屏与录屏、任务输出”八个页面。左侧按“设备工具 / 运行记录”分组；名称侧重实际用途，悬停可查看说明。“系统属性”对应 getprop / setprop，“系统设置”对应 Settings 名称空间，“应用包信息”只读查看与导出 APK，“投屏与录屏”使用 Scrcpy 独立窗口。使用 `windows11` 原生样式及浅色界面，页面标题与说明位于菜单所在顶行。
 
 导航使用统一线条图标：手机、命令终端、键值列表、齿轮、安装包、监控曲线、播放屏幕和输出文档。图标由 Qt 本地绘制并缓存，提供多倍像素与选中态配色，不依赖外部图标文件；左侧导航、“视图”菜单和相关工具栏入口共用名称与图标。
 
 ### 自带 Scrcpy 与 ADB
 
-Scrcpy 固定使用应用目录下 `tool/scrcpy-win64-v5.0/scrcpy.exe`（5.0）：源码取模块目录，便携版取 EXE 所在目录，不依赖当前工作目录、系统 PATH 或 `SCRCPY` 环境变量。请保留同目录的 `scrcpy-server` 和全部 DLL；缺失自带程序显示具体路径错误，不回退到外部 Scrcpy。
+Scrcpy 固定使用应用目录下 `tool/scrcpy-win64-v5.0/scrcpy.exe`（5.0）：源码取仓库根目录，便携版取 EXE 所在目录，不依赖当前工作目录、系统 PATH 或 `SCRCPY` 环境变量。请保留同目录的 `scrcpy-server` 和全部 DLL；缺失自带程序显示具体路径错误，不回退到外部 Scrcpy。
 
 ADB 默认仅使用应用自带的 `tool/scrcpy-win64-v5.0/adb.exe`，不查 PATH 或 adbutils 内置版本。显式覆盖依次采用 `ADB`、`ADBUTILS_ADB_PATH`，可以填写可执行文件路径或 PATH 可解析的名称；两个变量指向不同文件时明确报冲突，所选路径缺失时不回退。例如 CMD：
 
@@ -190,7 +210,7 @@ lib\python-3.14.8-embed-amd64\python.exe -s -m pytest tests -q
 构建使用当前嵌入式解释器；不修改开发环境的 `python314._pth`，不借用外部 Python，不复制整份 site-packages：
 
 ```bat
-lib\python-3.14.8-embed-amd64\python.exe -s build_android_toolbox.py
+lib\python-3.14.8-embed-amd64\python.exe -s scripts\build_android_toolbox.py
 ```
 
 - `AndroidToolbox.spec` 使用 windowed / onedir，保留正常依赖 hook；仅移除未使用的 Addons、QML / Quick / WebEngine。实际依赖版本记录于 `requirements-runtime.txt`、`requirements-build.txt` 和 `build-info.json`。
@@ -205,7 +225,7 @@ lib\python-3.14.8-embed-amd64\python.exe -s build_android_toolbox.py
 
 ## HTML 布局原型
 
-可直接浏览 `android_toolbox_layout.html` 查看推荐的 Windows 风格布局。原型包含分组导航、设备摘要卡、连接区、设备表格、快捷操作和可折叠活动日志。
+可直接浏览 `docs/design/android_toolbox_layout.html` 查看推荐的 Windows 风格布局。原型包含分组导航、设备摘要卡、连接区、设备表格、快捷操作和可折叠活动日志。
 
 HTML 原型已进一步落实布局建议：顶部仅保留高频工具、左侧导航分组、当前设备摘要卡提供快捷操作、设备表格支持双击与右键菜单、日志面板支持级别筛选和自动滚动。
 

@@ -1,10 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Build only through build_android_toolbox.py (it prepares the embedded stdlib)."""
+"""Build only through scripts/build_android_toolbox.py (it prepares the embedded stdlib)."""
 from pathlib import Path
 import json
 import os
+import sys
 
 from PyInstaller.utils.hooks import copy_metadata
+
+# The build script registers itself as this module; the fallback keeps the import
+# meaningful (and the error below reachable) when PyInstaller is run on the spec directly.
+if "build_android_toolbox" not in sys.modules:
+    sys.path.insert(0, str(Path(SPECPATH).resolve() / "scripts"))
 from build_android_toolbox import (
     BuildError, ensure_analysis_inputs, prune_unused_qt_addons, validate_stdlib_analysis,
 )
@@ -14,7 +20,7 @@ stage_value = os.environ.get("ANDROID_TOOLBOX_BUILD_STAGE")
 stdlib_value = os.environ.get("ANDROID_TOOLBOX_BUILD_STDLIB")
 if not stage_value or not stdlib_value:
     raise BuildError(
-        "Use lib/python-3.14.8-embed-amd64/python.exe -s build_android_toolbox.py; "
+        "Use lib/python-3.14.8-embed-amd64/python.exe -s scripts/build_android_toolbox.py; "
         "the spec requires its dedicated build stage."
     )
 stage = Path(stage_value).resolve()
@@ -42,7 +48,7 @@ for category, filename in (
 # No collect_all(), QML tree, development scripts, tests, or Qt Addons are bundled.
 a = Analysis(
     [str(source_root / "android_toolbox.py")],
-    pathex=[str(stdlib), str(source_root)],
+    pathex=[str(stdlib), str(source_root / "src"), str(source_root)],
     binaries=binaries,
     datas=datas,
     hiddenimports=[

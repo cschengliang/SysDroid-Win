@@ -17,6 +17,14 @@ lib\python-3.14.8-embed-amd64\python.exe -m pip install 包名
 
 始终使用 `python.exe -m pip`，不要依赖 `Scripts` 目录是否已加入 PATH。
 
+## 代码布局
+
+- 应用代码在 `src/sysdroid/`：`core/` 放不依赖界面的设备逻辑，`ui/` 放主窗口、主题和通用控件，`ui/pages/` 每个导航页一个模块；入口是 `sysdroid.app.main()`。
+- 根目录 `android_toolbox.py` 只是启动器（嵌入式 Python 不读 PYTHONPATH，由它把 `src/` 加入 `sys.path`），不要在里面写业务代码。
+- 模块之间使用 `sysdroid.*` 绝对导入。
+- 构建脚本在 `scripts/`，设计文档在 `docs/design/`，测试按 `tests/core|ui|packaging` 分组；测试文件名保持全局唯一（tests 下没有 `__init__.py`）。
+- 运行测试：`lib\python-3.14.8-embed-amd64\python.exe -s -m pytest tests -q`（务必带 `tests`，否则会收集 site-packages 里的测试）。
+
 ## Qt 开发约定
 
 - 使用 PySide6，不要与 PyQt6 混用。
