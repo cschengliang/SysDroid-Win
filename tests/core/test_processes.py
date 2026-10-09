@@ -33,16 +33,30 @@ def frame(sections, nonce=NONCE):
         for name, text, rc in sections) + f"DONE {nonce}\n"
 
 
-def sample_sections(*, records=None, total=1000, idle=300, ps=None, proc_rc=0,
+def sample_sections(*, records=None, total=1000, idle=300, ps=None, denied=(),
                     global_rc=0, status_rss="7 kB", status_size="99 kB",
                     mode="columns", hz="100", pages="4096", after_start=None,
-                    status_swap="0 kB", priority=20, nice=0, processor=0):
+                    status_swap="0 kB", priority=20, nice=0, processor=0, extra_stat=""):
+    """Device response in the bulk format; ``denied`` PIDs have no /proc records."""
     records = records if records is not None else [(42, 1000, 80)]
     if ps is None:
         ps = "PID UID PPID S NAME RSS VSZ ETIME ARGS\n" + "".join(
             f"{pid} 10042 1 S worker 9 88 01:30 /system/bin/worker --value 空 格\n"
             for pid, start, ticks in records)
-    sections = [
+    before = after = statuses = ""
+    for pid, start, ticks in records:
+        if pid in denied:
+            continue
+        before += stat(pid, start=start, ticks=ticks, priority=priority, nice=nice, processor=processor)
+        after += stat(pid, start=after_start if after_start is not None else start, ticks=ticks,
+                      priority=priority, nice=nice, processor=processor)
+        lines = [f"Pid:\t{pid}", "Uid:\t10042 10042 10042 10042", "Threads:\t3"]
+        for key, value in (("VmRSS", status_rss), ("VmSize", status_size), ("VmSwap", status_swap)):
+            if value is not None:
+                lines.append(f"{key}:\t{value}")
+        statuses += "".join(f"/proc/{pid}/status:{line}\n" for line in lines)
+    # Bulk reads return 1 when any PID vanished mid-read; that is not a failure.
+    return [
         ("ps-help", "RSS Resident Set Size (KiB)\nVSZ Virtual memory size (KiB)\n", 0),
         ("ps-mode", mode + "\n", 0),
         ("clock-ticks", hz + "\n", 0 if hz else 1),
@@ -52,22 +66,10 @@ def sample_sections(*, records=None, total=1000, idle=300, ps=None, proc_rc=0,
         ("cpu", f"cpu {total - idle} 0 0 {idle} 0 0 0 0 9999 8888\nbtime 1700000000\n", global_rc),
         ("uptime", "100.00 70.00\n", global_rc),
         ("memory", "MemTotal: 1024 kB\nMemAvailable: 768 kB\n", global_rc),
+        ("stats-before", before + extra_stat, 1 if denied else 0),
+        ("statuses", statuses, 1 if denied else 0),
+        ("stats-after", after + extra_stat, 1 if denied else 0),
     ]
-    for pid, start, ticks in records:
-        status = f"Name:\tworker\nPid:\t{pid}\nPPid:\t1\nUid:\t10042 10042 10042 10042\nState:\tS (sleeping)\nThreads:\t3\n"
-        if status_rss is not None:
-            status += f"VmRSS:\t{status_rss}\n"
-        if status_size is not None:
-            status += f"VmSize:\t{status_size}\n"
-        if status_swap is not None:
-            status += f"VmSwap:\t{status_swap}\n"
-        sections.extend([
-            (f"pid:{pid}:stat-before", stat(pid, start=start, ticks=ticks, priority=priority, nice=nice, processor=processor), proc_rc),
-            (f"pid:{pid}:status", status, proc_rc),
-            (f"pid:{pid}:stat-after", stat(pid, start=after_start if after_start is not None else start, ticks=ticks,
-                                         priority=priority, nice=nice, processor=processor), proc_rc),
-        ])
-    return sections
 
 
 def sample(**kwargs):
@@ -134,6 +136,13 @@ def finish_sample(runner, task=None, **kwargs):
 def finish_details(runner, task=None, **kwargs):
     task = task or runner.requests[-1]
     runner.finish(task, frame(detail_sections(**kwargs), request_nonce(task)))
+
+
+@pytest.fixture(autouse=True)
+def synchronous_parsing(monkeypatch):
+    # Parse inline so slot / publication ordering stays deterministic; the
+    # real worker thread is covered by a dedicated test.
+    monkeypatch.setattr(ProcessController, "_thread_executor", lambda self, job, done: done(job()))
 
 
 @pytest.fixture
@@ -207,7 +216,7 @@ def test_reordered_ps_headers_command_tail_and_numeric_uid_are_preserved():
 
 
 def test_named_user_is_not_an_invented_numeric_uid_and_ps_remains_available():
-    result = sample(ps="USER PID PPID S NAME\nshell 42 1 S worker\n", proc_rc=1).processes[42]
+    result = sample(ps="USER PID PPID S NAME\nshell 42 1 S worker\n", denied=(42,)).processes[42]
     assert result.uid is None and "uid" in result.unavailable
     assert result.name == "worker" and result.pid == 42
     assert result.start_ticks is None and result.cpu_ticks is None
@@ -226,7 +235,7 @@ def test_rss_prefers_status_then_ps_then_stat_with_actual_page_size():
 
 def test_unknown_ps_units_are_not_assumed_to_be_host_units():
     sections = [(name, "RSS VSZ memory size\n" if name == "ps-help" else text, rc)
-                for name, text, rc in sample_sections(proc_rc=1)]
+                for name, text, rc in sample_sections(denied=(42,))]
     info = parse_process_sample(frame(sections), nonce=NONCE, clock_ticks=None, page_size=None).processes[42]
     assert info.rss_bytes is None and info.vss_bytes is None
 
@@ -279,8 +288,7 @@ def test_single_pid_denial_and_global_denial_publish_only_available_fields():
     assert global_denied.total_ticks is None and global_denied.mem_available_bytes is None
     assert global_denied.processes[42].rss_bytes == 7 * 1024
     assert global_denied.processes[42].started_at is None
-    sections = sample_sections(records=[(42, 1000, 80), (43, 2000, 40)])
-    sections = [(name, text, 1 if name.startswith("pid:43:") else rc) for name, text, rc in sections]
+    sections = sample_sections(records=[(42, 1000, 80), (43, 2000, 40)], denied=(43,))
     result = parse_process_sample(frame(sections), nonce=NONCE, clock_ticks=100, page_size=4096)
     assert result.processes[42].start_ticks == 1000
     assert result.processes[43].start_ticks is None and result.processes[43].rss_bytes == 9 * 1024
@@ -313,9 +321,10 @@ def test_incomplete_critical_or_truncated_frames_never_become_successful_snapsho
 def test_missing_segments_duplicate_segments_and_extra_pid_are_rejected():
     sections = sample_sections()
     for bad in ([entry for entry in sections if entry[0] != "memory"],
-                [entry for entry in sections if entry[0] != "pid:42:stat-after"],
+                [entry for entry in sections if entry[0] != "stats-after"],
                 sections + [sections[4]],
-                sections + [("pid:999:status", "Pid: 999\n", 0)]):
+                sample_sections(extra_stat=stat(42, start=1000)),
+                sections + [("pid:42:status", "Pid: 42\n", 0)]):
         with pytest.raises(ValueError):
             parse_process_sample(frame(bad), nonce=NONCE, clock_ticks=100, page_size=4096)
 
@@ -542,7 +551,7 @@ def test_details_share_slot_do_not_change_baseline_and_reject_pid_reuse(process_
 
 def test_no_reliable_start_disables_unsafe_details_and_raw_failure_survives(process_runner, controller):
     controller.set_active(True)
-    finish_sample(process_runner, proc_rc=1)
+    finish_sample(process_runner, denied=(42,))
     with pytest.raises(ValueError):
         controller.load_details(42, None)
     controller.set_auto_refresh(False)
@@ -617,8 +626,7 @@ def test_page_unknown_cpu_sorts_last_both_directions_and_repeated_errors_do_not_
     finish_sample(process_runner, records=[(42, 1000, 80), (43, 2000, 40)])
     page.controller.set_auto_refresh(False)
     task = page.controller.refresh()
-    sections = sample_sections(records=[(42, 1000, 120), (43, 2000, 40)], total=1400)
-    sections = [(name, text, 1 if name.startswith("pid:43:") else rc) for name, text, rc in sections]
+    sections = sample_sections(records=[(42, 1000, 120), (43, 2000, 40)], total=1400, denied=(43,))
     process_runner.finish(task, frame(sections, request_nonce(task)))
     for order in (Qt.SortOrder.DescendingOrder, Qt.SortOrder.AscendingOrder):
         page.table.sortItems(5, order)
@@ -656,3 +664,175 @@ def test_page_hidden_keeps_items_until_reactivation_and_does_not_attach_old_pid_
     page.table.setCurrentCell(0, 0)
     assert "启动序号：17" not in page.detail_text.toPlainText()
     page.set_active(False)
+
+
+# --- PR 2: lighter sampling, worker parsing, queueing, actions -------------
+
+from functools import partial
+import threading
+
+from sysdroid.core import processes as processes_module
+from sysdroid.core.processes import SAMPLE_INTERVALS, ProcessInfo, app_package
+
+_REAL_EXECUTOR = ProcessController.__dict__["_thread_executor"]
+
+
+def script_of(task):
+    return shlex.split(task.args[1])[2]
+
+
+def test_sample_script_reads_proc_in_three_bulk_passes_without_per_pid_loop():
+    script = processes_module._sample_script("n1", "columns", {})
+    assert script.count("cat /proc/[0-9]*/stat") == 2
+    assert "grep -H -E" in script and "/proc/[0-9]*/status" in script
+    assert "while IFS= read -r ps_line" not in script
+    assert "set +f" in script  # the helpers disable globbing; the bulk reads need it
+
+
+def test_bulk_records_ignore_new_pids_and_comm_newline_fragments_but_reject_duplicates():
+    fragment = "77 (bad\n" + "name) S 1 0\n"
+    result = sample(extra_stat=stat(999, start=5) + fragment).processes
+    assert set(result) == {42} and result[42].start_ticks == 1000
+    with pytest.raises(ValueError):
+        sample(extra_stat=stat(42, start=1000))
+
+
+def test_failed_discovery_never_locks_a_guessed_ps_mode_and_retries_with_backoff(process_runner, controller):
+    now = [100.0]
+    controller._monotonic = lambda: now[0]
+    controller.set_active(True)
+    first = process_runner.requests[-1]
+    assert "ps-mode" in script_of(first)
+    process_runner.finish(first, "", "timeout", None, status="timed_out")
+    assert controller._ps_mode is None and "ps 能力探测失败" in controller.status
+    controller._tick()
+    assert len(process_runner.requests) == 1  # backoff: no retry storm every tick
+    now[0] += 2.5
+    controller._tick()
+    retry = process_runner.requests[-1]
+    assert len(process_runner.requests) == 2 and "ps-mode" in script_of(retry)
+    process_runner.finish(retry, frame(sample_sections(), request_nonce(retry))[:-10])  # damaged frame
+    now[0] += 2.5
+    controller._tick()
+    assert len(process_runner.requests) == 2  # second failure waits longer
+    controller.set_auto_refresh(False)
+    manual = controller.refresh()  # manual refresh bypasses the backoff
+    assert "ps-mode" in script_of(manual)
+    finish_sample(process_runner, manual, mode="all")
+    assert controller._ps_mode == "all" and controller._discovery_failures == 0
+    following = controller.refresh()
+    assert "ps-mode" not in script_of(following) and "$(ps -A)" in script_of(following)
+
+
+def test_fixed_ps_mode_that_keeps_failing_is_rediscovered(process_runner, controller):
+    controller.set_active(True)
+    finish_sample(process_runner)
+    controller.set_auto_refresh(False)
+    for attempt in range(3):
+        task = controller.refresh()
+        assert "ps-mode" not in script_of(task)
+        nonce = request_nonce(task)
+        process_runner.finish(task, frame(sample_sections(), nonce).replace(f"END {nonce} ps 0", f"END {nonce} ps 1"))
+    assert controller._ps_mode is None
+    assert "ps-mode" in script_of(controller.refresh())
+
+
+def test_details_requested_while_sampling_are_queued_not_dropped(process_runner, controller, qtbot):
+    controller.set_active(True)
+    finish_sample(process_runner, records=[(42, 1000, 80), (43, 2000, 40)])
+    controller.set_auto_refresh(False)
+    sampling = controller.refresh()
+    assert controller.load_details(42, 1000) is None
+    assert controller.details_pending and "已排队" in controller.status
+    assert controller.load_details(43, 2000) is None  # latest request wins
+    finish_sample(process_runner, sampling, records=[(42, 1000, 80), (43, 2000, 40)])
+    qtbot.waitUntil(lambda: len(process_runner.requests) == 3)
+    detail = process_runner.requests[-1]
+    assert "43" in detail.title and not controller.details_pending
+    finish_details(process_runner, detail, pid=43, start=2000)
+    assert controller.details.pid == 43
+    assert process_runner.maximum_pending == 1
+
+
+def test_queued_details_for_a_process_that_exited_are_cancelled_with_reason(process_runner, controller, qtbot):
+    controller.set_active(True)
+    finish_sample(process_runner, records=[(42, 1000, 80), (43, 2000, 40)])
+    controller.set_auto_refresh(False)
+    sampling = controller.refresh()
+    controller.load_details(43, 2000)
+    finish_sample(process_runner, sampling, records=[(42, 1000, 80)])
+    qtbot.wait(20)
+    assert len(process_runner.requests) == 2 and not controller.details_pending
+    assert "43" in controller.error and "取消" in controller.status
+
+
+def test_sampling_interval_is_configurable_and_validated(controller):
+    controller.set_active(True)
+    for value in SAMPLE_INTERVALS:
+        controller.set_interval(value)
+        assert controller.interval == value == controller._timer.interval()
+    with pytest.raises(ValueError):
+        controller.set_interval(1500)
+
+
+def test_parsing_runs_in_a_worker_thread_and_holds_the_slot_until_applied(process_runner, controller, qtbot, monkeypatch):
+    controller._executor = partial(_REAL_EXECUTOR, controller)
+    threads = []
+    original = processes_module.parse_process_sample
+
+    def recording(*args, **kwargs):
+        threads.append(threading.current_thread())
+        return original(*args, **kwargs)
+    monkeypatch.setattr(processes_module, "parse_process_sample", recording)
+    controller.set_active(True)
+    finish_sample(process_runner)
+    assert controller.busy and controller.sample is None  # published only via the queued result
+    qtbot.waitUntil(lambda: controller.sample is not None)
+    assert not controller.busy and threads and threads[0] is not threading.main_thread()
+
+
+def test_worker_result_for_a_switched_device_is_discarded(process_runner, controller, qtbot):
+    controller._executor = partial(_REAL_EXECUTOR, controller)
+    controller.set_active(True)
+    old = process_runner.requests[-1]
+    finish_sample(process_runner, old)
+    controller.set_device("device-b")
+    qtbot.waitUntil(lambda: len(process_runner.requests) == 2)
+    assert controller.sample is None and process_runner.requests[-1].serial == "device-b"
+
+
+def test_kill_reverifies_identity_on_device_and_refreshes_after(process_runner, controller, qtbot):
+    results = []
+    controller.action_finished.connect(lambda message, ok: results.append((message, ok)))
+    controller.set_active(True)
+    finish_sample(process_runner)
+    with pytest.raises(ValueError):
+        controller.kill_process(42, 999)  # identity no longer matches the sample
+    task = controller.kill_process(42, 1000)
+    script = script_of(task)
+    assert "expected=1000" in script and "kill -s TERM $pid" in script and '"${20}"' in script
+    process_runner.finish(task)
+    assert results[-1][1] and "已完成" in results[-1][0]
+    qtbot.waitUntil(lambda: len(process_runner.requests) == 3)  # follow-up sample
+    finish_sample(process_runner)
+    forced = controller.kill_process(42, 1000, force=True)
+    assert "kill -s KILL" in script_of(forced)
+    process_runner.finish(forced, "", "kill: 42: Operation not permitted", 1)
+    assert not results[-1][1] and "强行停止应用" in results[-1][0]
+
+
+def test_force_stop_and_app_package_detection(process_runner, controller):
+    controller.set_active(True)
+    task = controller.force_stop("com.example.app", 10)
+    assert shlex.split(task.args[1]) == ["am", "force-stop", "--user", "10", "com.example.app"]
+    with pytest.raises(ValueError):
+        controller.force_stop("bad package;rm", 0)
+
+    def info(uid, name, command):
+        return ProcessInfo(1, uid, 1, name, "S", 1, 1, None, None, None, None, None, None, command,
+                           None, None, None, None, None, {})
+    assert app_package(info(10123, "ple.app:remote", "com.example.app:remote")) == "com.example.app"
+    assert app_package(info(1010123, "x", "com.work.app")) == "com.work.app"
+    assert app_package(info(1000, "system_server", "system_server")) is None
+    assert app_package(info(None, "com.a.b", "com.a.b")) is None
+    assert app_package(info(10001, "app_process", "/system/bin/app_process")) is None
