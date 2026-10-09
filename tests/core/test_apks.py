@@ -390,6 +390,23 @@ def test_stopped_split_export_preserves_partial_and_submits_no_next_pull(ready, 
 
 # --- PR 2: batched lists, install progress, page actions --------------------
 
+def make_page(qapp, members='package:com.example.app\n', system='', disabled=''):
+    from sysdroid.core.users import AndroidUserController
+    from sysdroid.ui.pages.apk_page import ApkPage
+
+    runner = Runner()
+    users = AndroidUserController(runner)
+    users.set_device('a')
+    page = ApkPage(runner, users)
+    page.set_device('a')
+    page.set_active(True)
+    runner.finish('Users:\n\tUserInfo{0:Owner:13} running\n')
+    runner.finish('0\n')
+    complete_list(runner, members, system, disabled)
+    page.table.selectRow(0)
+    return runner, page
+
+
 def test_list_script_runs_every_query_in_one_framed_round_trip():
     from sysdroid.core.apks import list_script, parse_list_batch
     script = list_script('abc', 10, ['-f', '-U'])
@@ -417,3 +434,106 @@ def test_install_streams_progress_from_the_adb_binary_output(ready, tmp_path):
     runner.finish('Performing Streamed Install\nSuccess\n')
     complete_list(runner)
     assert controller.status.startswith('安装命令成功') and not controller.busy
+
+
+def test_page_basic_info_is_a_table_with_unknowns_marked(qapp):
+    runner, page = make_page(qapp)
+    page._details()
+    runner.finish(dump())
+    runner.finish('package:/data/app/a/base.apk\npackage:/data/app/a/split_en.apk\n')
+    rows = {page.basic.item(row, 0).text(): page.basic.item(row, 1).text() for row in range(page.basic.rowCount())}
+    assert rows['包名'] == 'com.example.app' and rows['版本码'] == '10' and rows['系统应用'] == '是'
+    assert rows['推导 UID（非实测）'] == str(10023)
+    assert rows['主 ABI'] == '设备未提供/未识别'
+    assert rows['split 1'] == '/data/app/a/split_en.apk'
+    page.deleteLater()
+
+
+@pytest.mark.parametrize('action,expected', [
+    ('_uninstall', ['pm', 'uninstall', '--user', '0', 'com.example.app']),
+    ('_disable', ['pm', 'disable-user', '--user', '0', 'com.example.app']),
+    ('_force_stop', ['am', 'force-stop', '--user', '0', 'com.example.app']),
+])
+def test_page_destructive_actions_need_confirmation(qapp, monkeypatch, action, expected):
+    from PySide6.QtWidgets import QMessageBox
+    runner, page = make_page(qapp)
+    before = len(runner.requests)
+    answers = [QMessageBox.StandardButton.No]
+    monkeypatch.setattr(QMessageBox, 'exec', lambda box: answers[0])
+    getattr(page, action)()
+    assert len(runner.requests) == before
+    answers[0] = QMessageBox.StandardButton.Yes
+    getattr(page, action)()
+    assert shlex.split(runner.requests[-1].args[1]) == expected
+    page.deleteLater()
+
+
+def test_page_enable_and_launch_run_without_confirmation(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    runner, page = make_page(qapp, disabled='package:com.example.app\n')
+    monkeypatch.setattr(QMessageBox, 'exec', lambda box: pytest.fail('unexpected confirmation'))
+    assert page.controller.packages['com.example.app'].enabled is False
+    page._enable()
+    assert shlex.split(runner.requests[-1].args[1]) == ['pm', 'enable', '--user', '0', 'com.example.app']
+    runner.finish('Package com.example.app new state: enabled\n')
+    complete_list(runner)
+    page._launch()
+    assert 'resolve-activity' in runner.requests[-1].args[1]
+    page.deleteLater()
+
+
+def test_page_install_via_picker_and_drop_uses_options_and_shows_progress(qapp, monkeypatch, tmp_path):
+    from PySide6.QtCore import QMimeData, QUrl
+    from PySide6.QtWidgets import QFileDialog
+    runner, page = make_page(qapp)
+    apk, split = tmp_path / 'base.apk', tmp_path / 'split_en.apk'
+    apk.write_bytes(b'a')
+    split.write_bytes(b'b')
+    monkeypatch.setattr(QFileDialog, 'getOpenFileNames', lambda *args, **kwargs: ([str(apk), str(split)], ''))
+    options = [None]
+    monkeypatch.setattr(page, '_ask_install_options', lambda files: options[0])
+    before = len(runner.requests)
+    page._pick_install()
+    assert len(runner.requests) == before  # dialog cancelled
+    options[0] = (True, False)
+    page._pick_install()
+    task = runner.requests[-1]
+    assert task.args[:4] == ['install-multiple', '--user', '0', '-r'] and len(task.args) == 6
+    assert page.install_row.isVisibleTo(page) and page.install_progress.maximum() == 0
+    runner.task_output.emit(task.id, 'stdout', '[ 70%] pushing\n')
+    assert page.install_progress.value() == 70 and 'pushing' in page.install_label.text()
+    page._cancel_install()
+    assert runner.cancelled == [task.id]
+    runner.finish('Failure [INSTALL_FAILED_ABORTED]\n', code=1)
+    assert not page.install_row.isVisibleTo(page) and page.controller.error
+
+    class Drop:
+        def __init__(self, paths):
+            self._mime = QMimeData()
+            self._mime.setUrls([QUrl.fromLocalFile(str(path)) for path in paths])
+        def mimeData(self):
+            return self._mime
+    assert page._dropped_apks(Drop([apk])) == [apk]
+    assert page._dropped_apks(Drop([apk, tmp_path / 'notes.txt'])) == []
+    page.install_files([apk])
+    assert runner.requests[-1].args[:4] == ['install', '--user', '0', '-r']
+    page.deleteLater()
+
+
+def test_page_install_rejects_non_apk_and_context_change_during_dialog(qapp, monkeypatch, tmp_path):
+    runner, page = make_page(qapp)
+    text = tmp_path / 'notes.txt'
+    text.write_text('x')
+    before = len(runner.requests)
+    page.install_files([text])
+    assert len(runner.requests) == before and '.apk' in page.error.text()
+    apk = tmp_path / 'a.apk'
+    apk.write_bytes(b'a')
+
+    def switch(files):
+        page.set_device('b')
+        return (False, False)
+    monkeypatch.setattr(page, '_ask_install_options', switch)
+    page.install_files([apk])
+    assert not any(task.args and task.args[0] == 'install' for task in runner.requests)
+    page.deleteLater()
