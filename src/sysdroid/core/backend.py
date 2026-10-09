@@ -3,8 +3,10 @@ from __future__ import annotations
 import codecs
 import json
 import os
+import re
 import shutil
 import signal
+import socket
 import subprocess
 import threading
 import time
@@ -13,6 +15,7 @@ from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 import adbutils
 from adbutils import AdbTimeout
@@ -26,6 +29,120 @@ STATUS_LABELS = {"starting": "启动中", "running": "运行中", "stopping": "�
                  "succeeded": "成功", "failed": "失败", "cancelled": "已停止", "timed_out": "超时"}
 OUTPUT_LIMIT = 2 * 1024 * 1024
 TRUNCATED = "[较早输出已截断；保留最近 2 MiB 字符]\n"
+_POLL_INTERVAL = 0.25
+# Requests the runner can actually interrupt: streamed shells and adb.exe subprocesses.
+_INTERRUPTIBLE = frozenset({"shell", "exec-out", "logcat", "install", "install-multiple", "start-server", "version"})
+_BENIGN_STDERR = re.compile(
+    r"^(?:WARNING: linker: .*|WARNING: generic atexit\(\) called from legacy shared library.*|"
+    r"Picked up (?:_JAVA_OPTIONS|JAVA_TOOL_OPTIONS): .*|\s*)$")
+
+
+def significant_stderr(text: str) -> str:
+    """Return stderr without the loader noise some ROMs print for every command."""
+    return "\n".join(line for line in text.splitlines() if not _BENIGN_STDERR.fullmatch(line))
+
+
+def windows_terminal_arg(value: str) -> str:
+    """Windows Terminal splits its command line on ';' even inside one argument."""
+    return value.replace(";", "\\;")
+
+
+_SUCCESS_MARKERS = {
+    "connect": ("connected to ", "already connected to "),
+    "disconnect": ("disconnected ",),
+    "root": ("restarting adbd as root", "adbd is already running as root"),
+    "unroot": ("restarting adbd as non root", "adbd not running as root"),
+}
+_FAILURE_MARKERS = ("error:", "failed", "failure", "cannot", "unable", "not running as root",
+                    "permission denied", "not supported", "no such device", "not found")
+
+
+def classify_text_result(command: str, text: str) -> bool:
+    """Whether a text-only adb service reply means success.
+
+    These services (connect, root, remount, ...) have no exit code, so the
+    known success replies are matched exactly; anything else is a failure.
+    """
+    lowered = text.casefold().strip()
+    if command in _SUCCESS_MARKERS:
+        return any(lowered.startswith(marker) or f"\n{marker}" in lowered for marker in _SUCCESS_MARKERS[command])
+    if command == "uninstall":
+        return re.search(r"(?m)^success\s*$", lowered) is not None and "failure" not in lowered
+    if command == "remount":
+        return "remount succeeded" in lowered or not any(marker in lowered for marker in _FAILURE_MARKERS)
+    return not any(marker in lowered for marker in _FAILURE_MARKERS)
+
+
+_BINARY_SIGNATURES = (
+    (b"\x89PNG\r\n\x1a\n", ".png"), (b"\xff\xd8\xff", ".jpg"), (b"GIF8", ".gif"),
+    (b"PK\x03\x04", ".zip"), (b"\x1f\x8b", ".gz"), (b"\x7fELF", ".elf"),
+)
+
+
+def sniff_binary(head: bytes) -> str | None:
+    """Return a file suffix when the first output bytes are clearly not text."""
+    for signature, suffix in _BINARY_SIGNATURES:
+        if head.startswith(signature):
+            return suffix
+    if b"\x00" in head:
+        return ".bin"
+    try:
+        head.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        # An incomplete multi-byte sequence at the very end is still text.
+        if exc.start < max(0, len(head) - 3):
+            return ".bin"
+    return None
+
+
+class _Stopped(Exception):
+    pass
+
+
+def read_shell_v2(recv: Callable[[int], bytes], emit: Callable[[str, bytes], None],
+                  stopped: Callable[[], bool]) -> int | None:
+    """Pump an adb shell v2 stream: [id:1][len:4 LE][payload].
+
+    Returns the remote exit code, or None when the stream ended without one.
+    Raises _Stopped when stopped() becomes true while waiting for data.
+    """
+    buffer = bytearray()
+    while True:
+        if stopped():
+            raise _Stopped()
+        try:
+            chunk = recv(65536)
+        except (socket.timeout, TimeoutError):
+            continue
+        if not chunk:
+            return None
+        buffer += chunk
+        while len(buffer) >= 5:
+            length = int.from_bytes(buffer[1:5], "little")
+            if len(buffer) < 5 + length:
+                break
+            kind = buffer[0]
+            payload = bytes(buffer[5:5 + length])
+            del buffer[:5 + length]
+            if kind == 1 and payload:
+                emit("stdout", payload)
+            elif kind == 2 and payload:
+                emit("stderr", payload)
+            elif kind == 3:
+                return payload[0] if payload else 255
+
+
+def read_raw(recv: Callable[[int], bytes], emit: Callable[[bytes], None], stopped: Callable[[], bool]) -> None:
+    while True:
+        if stopped():
+            raise _Stopped()
+        try:
+            chunk = recv(65536)
+        except (socket.timeout, TimeoutError):
+            continue
+        if not chunk:
+            return
+        emit(chunk)
 
 
 def powershell_command(program: str, args: list[str]) -> str:
@@ -88,11 +205,26 @@ class _AdbResult:
     exit_code: int | None = 0
 
 
+class _AdbControl:
+    """Shared between the UI thread and one adb worker thread."""
+
+    def __init__(self, task_id: str, emit: Callable[[str, str, str], None]) -> None:
+        self.task_id = task_id
+        self.stop = threading.Event()
+        self.interruptible = False
+        self._emit = emit
+
+    def output(self, stream: str, text: str) -> None:
+        if text:
+            self._emit(self.task_id, stream, text)
+
+
 @dataclass
 class _AdbRunning:
     thread: threading.Thread
     started: float
     timeout: int
+    control: _AdbControl | None = None
     stop_at: float | None = None
     outcome: str | None = None
 
@@ -136,6 +268,8 @@ class TaskRunner(QObject):
         self._last_elapsed_emit = 0.0
         self._history_writable = True
         self._history_path = DATA_DIR / "history.json"
+        self._features: dict[str, set[str]] = {}
+        self._features_lock = threading.Lock()
         try:
             if self._history_path.exists():
                 records = json.loads(self._history_path.read_text(encoding="utf-8"))
@@ -185,13 +319,18 @@ class TaskRunner(QObject):
         self.task_changed.emit(task)
         if task.status in TERMINAL_STATUSES:
             return
-        thread = threading.Thread(target=self._run_adb, args=(task.id, args, serial, timeout), daemon=True)
-        self._adb_running[task.id] = _AdbRunning(thread, time.monotonic(), timeout)
+        control = _AdbControl(task.id, self._queue_output)
+        control.interruptible = bool(args) and args[0].lower() in _INTERRUPTIBLE
+        thread = threading.Thread(target=self._run_adb, args=(task.id, args, serial, timeout, control), daemon=True)
+        self._adb_running[task.id] = _AdbRunning(thread, time.monotonic(), timeout, control)
         thread.start()
 
-    def _run_adb(self, task_id: str, args: list[str], serial: str, timeout: int) -> None:
+    def _run_adb(self, task_id: str, args: list[str], serial: str, timeout: int,
+                 control: _AdbControl | None = None) -> None:
         try:
-            result = self._execute_adb(args, serial, timeout)
+            result = self._execute_adb(args, serial, timeout, control)
+        except _Stopped:
+            result = _AdbResult(exit_code=None)
         except subprocess.TimeoutExpired as exc:
             decode = lambda value: value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
             result = _AdbResult(stdout=decode(exc.stdout), stderr=decode(exc.stderr) + f"\nTimeoutExpired: {exc}\n", exit_code=None)
@@ -206,6 +345,8 @@ class TaskRunner(QObject):
         task = self.tasks.get(task_id)
         if task is None or task.status in TERMINAL_STATUSES:
             return
+        # Output streamed while the request ran comes before the final reply.
+        self._drain_output(task_id)
         if result.stdout:
             self._receive_output(task_id, "stdout", result.stdout)
         if result.stderr:
@@ -223,35 +364,59 @@ class TaskRunner(QObject):
         terminal = directory / "tool" / "terminal-1.25.2733.0" / "WindowsTerminal.exe"
         if not terminal.is_file():
             raise ValueError(f"找不到项目内置终端：{terminal}")
-        adb = self._adb_binary()
-        args = ["-w", "new", "new-tab", "--title", f"ADB · {serial}",
-                "--suppressApplicationTitle", "-d", str(directory), adb, "-s", serial, "shell"]
+        args = self.adb_terminal_args(serial, str(directory))
         # Interactive stdin and output belong to Terminal, not the task runner's pipes.
         started, pid = QProcess.startDetached(str(terminal), args, str(directory))
         if not started:
             raise OSError(f"无法启动项目内置终端：{terminal}")
         return pid
 
-    def _run_adb_binary(self, args: list[str], timeout: int, serial: str = "") -> _AdbResult:
-        completed = subprocess.run(
-            [self._adb_binary(), *(["-s", serial] if serial else []), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=max(float(timeout), 1.0), check=False,
+    def adb_terminal_args(self, serial: str, directory: str) -> list[str]:
+        return ["-w", "new", "new-tab", "--title", windows_terminal_arg(f"ADB · {serial}"),
+                "--suppressApplicationTitle", "-d", windows_terminal_arg(directory),
+                windows_terminal_arg(self._adb_binary()), "-s", windows_terminal_arg(serial), "shell"]
+
+    def _run_adb_binary(self, args: list[str], timeout: int, serial: str,
+                        control: _AdbControl) -> _AdbResult:
+        """Run the bundled adb.exe, streaming its output and stopping it on request."""
+        process = subprocess.Popen(
+            [self._adb_binary(), *(["-s", serial] if serial else []), *args], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
-        return _AdbResult(
-            stdout=completed.stdout.decode("utf-8", errors="replace"),
-            stderr=completed.stderr.decode("utf-8", errors="replace"),
-            exit_code=completed.returncode,
-        )
+
+        def pump(stream: str) -> None:
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            pipe = getattr(process, stream)
+            try:
+                while chunk := pipe.read1(8192):
+                    control.output(stream, decoder.decode(chunk))
+                control.output(stream, decoder.decode(b"", final=True))
+            finally:
+                pipe.close()
+
+        readers = [threading.Thread(target=pump, args=(stream,), daemon=True) for stream in ("stdout", "stderr")]
+        for reader in readers:
+            reader.start()
+        deadline = time.monotonic() + timeout if timeout > 0 else None
+        stopped = False
+        while process.poll() is None:
+            if control.stop.is_set() or (deadline is not None and time.monotonic() >= deadline):
+                stopped = True
+                process.kill()
+                break
+            time.sleep(0.05)
+        process.wait()
+        for reader in readers:
+            reader.join(2)
+        return _AdbResult(exit_code=None if stopped else process.returncode)
 
     @staticmethod
-    def _text_result(output: object) -> _AdbResult:
+    def _text_result(output: object, command: str = "") -> _AdbResult:
         text = "" if output is None else str(output)
         if text and not text.endswith("\n"):
             text += "\n"
-        lowered = text.casefold()
-        failed = any(marker in lowered for marker in ("error:", "failed", "failure", "cannot", "unable"))
-        return _AdbResult(stdout=text, exit_code=1 if failed else 0)
+        return _AdbResult(stdout=text, exit_code=0 if classify_text_result(command, text) else 1)
 
     @staticmethod
     def _transport_command(device, command: str) -> str:
@@ -260,13 +425,149 @@ class TaskRunner(QObject):
             connection.check_okay()
             return connection.read_until_close()
 
-    def _execute_adb(self, args: list[str], serial: str, timeout: int) -> _AdbResult:
+    @staticmethod
+    def _adb_client(timeout: int) -> adbutils.AdbClient:
+        # runtime_paths.configure_runtime() set ADB / ADBUTILS_ADB_PATH once at startup;
+        # workers never touch os.environ. Clients are plain host/port holders.
+        return adbutils.AdbClient(socket_timeout=float(timeout) if timeout > 0 else None)
+
+    def _device_features(self, device, serial: str) -> set[str]:
+        with self._features_lock:
+            cached = self._features.get(serial)
+        if cached is None:
+            cached = set(device.get_features().split(","))
+            with self._features_lock:
+                self._features[serial] = cached
+        return cached
+
+    def forget_device_features(self, serial: str = "") -> None:
+        with self._features_lock:
+            if serial:
+                self._features.pop(serial, None)
+            else:
+                self._features.clear()
+
+    def _stream_shell(self, device, serial: str, command: str, timeout: int, control: _AdbControl,
+                      raw: bool) -> _AdbResult:
+        """Run a device command, forwarding output as it arrives.
+
+        Closing the transport is how adb stops a remote command, so a stop
+        request (cancel or timeout) ends the read loop and closes the socket.
+        """
+        v2 = not raw and "shell_v2" in self._device_features(device, serial)
+        marker = f"SYSDROID-EXIT-{uuid.uuid4().hex}:"
+        if raw:
+            service = "exec:" + command
+        elif v2:
+            service = "shell,v2,raw:" + command
+        else:
+            service = "shell:" + command + f"\necho {marker}$?"
+        # The handshake keeps a socket timeout; the stream itself is bounded by the task timeout.
+        connection = device.open_transport(timeout=min(max(float(timeout), 1.0), 30.0) if timeout > 0 else 30.0)
+        try:
+            connection.send_command(service)
+            connection.check_okay()
+            connection.conn.settimeout(_POLL_INTERVAL)
+            stopped = control.stop.is_set
+            recv = connection.conn.recv
+            if raw:
+                return self._pump_exec_out(recv, control, stopped)
+            decoders = {name: codecs.getincrementaldecoder("utf-8")(errors="replace") for name in ("stdout", "stderr")}
+
+            def emit(stream: str, data: bytes) -> None:
+                control.output(stream, decoders[stream].decode(data))
+
+            if v2:
+                code = read_shell_v2(recv, emit, stopped)
+            else:
+                code = self._pump_shell_v1(recv, emit, stopped, marker.encode())
+            for stream, decoder in decoders.items():
+                control.output(stream, decoder.decode(b"", final=True))
+            if code is None:
+                raise ConnectionError("ADB 连接在命令结束前断开，未收到退出码")
+            return _AdbResult(exit_code=code)
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _pump_shell_v1(recv, emit, stopped, marker: bytes) -> int | None:
+        # Old devices without shell_v2: hold back a tail long enough to hide the exit marker.
+        pending = bytearray()
+        keep = len(marker) + 8
+
+        def forward(data: bytes) -> None:
+            pending.extend(data)
+            if len(pending) > keep:
+                emit("stdout", bytes(pending[:-keep]))
+                del pending[:-keep]
+
+        read_raw(recv, forward, stopped)
+        index = pending.rfind(marker)
+        if index < 0:
+            emit("stdout", bytes(pending))
+            return None
+        emit("stdout", bytes(pending[:index]))
+        try:
+            return int(pending[index + len(marker):].strip() or b"255")
+        except ValueError:
+            return None
+
+    def _pump_exec_out(self, recv, control: _AdbControl, stopped) -> _AdbResult:
+        """exec-out is raw bytes: text is shown live, binary data goes to a file."""
+        state = {"head": bytearray(), "mode": "", "file": None, "path": None, "size": 0}
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+        def decide(final: bool) -> None:
+            head = bytes(state["head"])
+            suffix = sniff_binary(head)
+            if suffix is None and not final and len(head) < 4096:
+                return
+            if suffix is None:
+                state["mode"] = "text"
+                control.output("stdout", decoder.decode(head))
+            else:
+                directory = DATA_DIR / "exec-out"
+                directory.mkdir(parents=True, exist_ok=True)
+                path = directory / f"{datetime.now():%Y%m%d-%H%M%S}-{control.task_id[:8] or uuid.uuid4().hex[:8]}{suffix}"
+                state.update(mode="binary", path=path, file=path.open("wb"))
+                state["file"].write(head)
+                state["size"] = len(head)
+                control.output("stdout", f"检测到二进制输出，正在写入：{path}\n")
+
+        def emit(chunk: bytes) -> None:
+            if state["mode"] == "text":
+                control.output("stdout", decoder.decode(chunk))
+            elif state["mode"] == "binary":
+                state["file"].write(chunk)
+                state["size"] += len(chunk)
+            else:
+                state["head"].extend(chunk)
+                decide(False)
+
+        try:
+            read_raw(recv, emit, stopped)
+            if not state["mode"] and state["head"]:
+                decide(True)
+            if state["mode"] == "text":
+                control.output("stdout", decoder.decode(b"", final=True))
+        finally:
+            if state["file"] is not None:
+                state["file"].close()
+                control.output("stdout", f"已保存二进制输出 {state['size']} 字节：{state['path']}\n")
+        return _AdbResult()
+
+    def _execute_adb(self, args: list[str], serial: str, timeout: int,
+                     control: _AdbControl | None = None) -> _AdbResult:
         if not args:
             raise ValueError("ADB 命令不能为空")
-        selected = self._adb_binary()
-        os.environ["ADB"] = selected
-        os.environ["ADBUTILS_ADB_PATH"] = selected
-        client = adbutils.AdbClient(socket_timeout=max(float(timeout), 1.0))
+        if control is None:
+            # Direct callers get streamed output folded into the returned result.
+            collected = {"stdout": [], "stderr": []}
+            control = _AdbControl("", lambda _task, stream, text: collected[stream].append(text))
+            result = self._execute_adb(args, serial, timeout, control)
+            return _AdbResult("".join(collected["stdout"]) + result.stdout,
+                              "".join(collected["stderr"]) + result.stderr, result.exit_code)
+        client = self._adb_client(timeout)
         command = args[0].lower()
         values = args[1:]
         if command == "devices":
@@ -279,28 +580,27 @@ class TaskRunner(QObject):
         if command == "connect":
             if len(values) != 1:
                 raise ValueError("adb connect 需要一个 host:port 地址")
-            return self._text_result(client.connect(values[0], timeout=timeout))
+            return self._text_result(client.connect(values[0], timeout=timeout), command)
         if command == "disconnect":
             if len(values) != 1:
                 raise ValueError("adb disconnect 需要一个无线设备地址")
-            return self._text_result(client.disconnect(values[0], raise_error=True))
+            return self._text_result(client.disconnect(values[0], raise_error=True), command)
         if command == "kill-server":
             client.server_kill()
             return _AdbResult(stdout="ADB Server 已停止\n")
         if command in {"start-server", "version"}:
-            return self._run_adb_binary([command], timeout)
+            return self._run_adb_binary([command], timeout, "", control)
         if not serial:
             raise ValueError(f"ADB 子命令 {command} 需要设备 Serial")
         if command in {"install", "install-multiple"}:
-            return self._run_adb_binary(args, timeout, serial)
+            return self._run_adb_binary(args, timeout, serial, control)
         device = client.device(serial)
         if command in {"shell", "exec-out", "logcat"}:
             shell_values = values if command != "logcat" else ["logcat", *values]
             if not shell_values:
                 raise ValueError("Shell 命令不能为空")
-            result = device.shell2(" ".join(shell_values), timeout=timeout, encoding="utf-8", rstrip=False, v2=True)
-            stdout = result.stdout or (result.output if not result.stderr else "")
-            return _AdbResult(stdout=stdout, stderr=result.stderr, exit_code=result.returncode)
+            return self._stream_shell(device, serial, " ".join(shell_values), timeout, control,
+                                      raw=command == "exec-out")
         if command == "push":
             if len(values) != 2:
                 raise ValueError("adb push 需要本地源路径和设备目标路径")
@@ -314,14 +614,17 @@ class TaskRunner(QObject):
         if command == "uninstall":
             if len(values) != 1:
                 raise ValueError("adb uninstall 需要一个包名")
-            return self._text_result(device.uninstall(values[0]))
-        if command == "root":
-            return self._text_result(device.root())
+            return self._text_result(device.uninstall(values[0]), command)
+        if command in {"root", "unroot"}:
+            self.forget_device_features(serial)
+            return self._text_result(self._transport_command(device, command + ":"), command)
         if command == "remount":
-            return self._text_result(self._transport_command(device, "remount:"))
+            return self._text_result(self._transport_command(device, "remount:"), command)
         if command == "reboot":
-            result = device.shell2(" ".join(["reboot", *values]), timeout=timeout, encoding="utf-8", rstrip=False, v2=True)
-            return _AdbResult(stdout=result.stdout or result.output, stderr=result.stderr, exit_code=result.returncode)
+            if len(values) > 1:
+                raise ValueError("adb reboot 最多接受一个目标，例如 recovery 或 bootloader")
+            self.forget_device_features(serial)
+            return self._reboot(device, values[0] if values else "")
         if command == "forward":
             if len(values) != 2:
                 raise ValueError("adb forward 需要本地和设备端点")
@@ -332,15 +635,25 @@ class TaskRunner(QObject):
                 raise ValueError("adb reverse 需要设备端和本地端点")
             device.reverse(values[0], values[1])
             return _AdbResult()
-        if command == "get-state":
-            return self._text_result(device.get_state())
-        if command == "get-serialno":
-            return self._text_result(device.get_serialno())
-        if command == "get-devpath":
-            return self._text_result(device.get_devpath())
-        if command == "get-features":
-            return self._text_result(device.get_features())
+        if command in {"get-state", "get-serialno", "get-devpath", "get-features"}:
+            reader = {"get-state": device.get_state, "get-serialno": device.get_serialno,
+                      "get-devpath": device.get_devpath, "get-features": device.get_features}[command]
+            text = str(reader())
+            return _AdbResult(stdout=text if text.endswith("\n") else text + "\n")
         raise ValueError(f"暂不支持通过 adbutils 执行 ADB 子命令：{command}")
+
+    @staticmethod
+    def _reboot(device, target: str) -> _AdbResult:
+        # adbd drops the connection as the device goes down; that is the expected reply.
+        with device.open_transport() as connection:
+            connection.send_command("reboot:" + target)
+            connection.check_okay()
+            try:
+                reply = connection.read_until_close()
+            except (OSError, AdbTimeout, EOFError):
+                reply = ""
+        text = (str(reply).strip() + "\n") if str(reply).strip() else ""
+        return _AdbResult(stdout=text + f"已请求重启设备{('到 ' + target) if target else ''}\n")
 
     def start_process(self, title: str, program: str, args: list[str], serial: str = "",
                       command_id: str = "", timeout: int = 0, kind: str = "process",
@@ -468,7 +781,7 @@ class TaskRunner(QObject):
             if running.timeout and task.elapsed >= running.timeout and running.outcome is None:
                 running.outcome = "timed_out"
                 task.status = "stopping"
-                self._receive_output(task_id, "stderr", f"\n任务超过 {running.timeout} 秒，正在等待当前 ADB 请求返回。\n")
+                self._request_adb_stop(task_id, running, f"\n任务超过 {running.timeout} 秒，正在停止；已收到的输出会保留。\n")
                 self.task_changed.emit(task)
             elif emit_elapsed:
                 self.task_changed.emit(task)
@@ -583,12 +896,20 @@ class TaskRunner(QObject):
                     return
                 adb_running.outcome = "cancelled"
                 task.status = "stopping"
-                self._receive_output(task_id, "stderr", "\n正在等待当前 ADB 请求返回；adbutils 无法中断已发出的请求。\n")
+                self._request_adb_stop(task_id, adb_running, "\n正在停止 ADB 请求。\n")
                 self.task_changed.emit(task)
             else:
                 self._finish(task, "cancelled", None)
         else:
             self._stop(task, running, running.outcome or "cancelled", force)
+
+    def _request_adb_stop(self, task_id: str, running: _AdbRunning, message: str) -> None:
+        control = running.control
+        if control is not None:
+            control.stop.set()
+        if control is None or not control.interruptible:
+            message += "此类 ADB 请求无法中途中断，将在其返回后结束。\n"
+        self._receive_output(task_id, "stderr", message)
 
     def _stop(self, task: Task, running: _Running, outcome: str, force: bool) -> None:
         running.outcome = outcome
