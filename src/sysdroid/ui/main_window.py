@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from typing import Callable
 
@@ -14,7 +15,8 @@ from PySide6.QtWidgets import (
 )
 
 from sysdroid.app_info import APP_NAME, APP_TITLE, APP_VERSION
-from sysdroid.core.backend import DATA_DIR, STATUS_LABELS, Device, Task, TaskRunner, parse_devices
+from sysdroid.core.backend import DATA_DIR, STATUS_LABELS, Device, Task, TaskRunner, parse_devices, significant_stderr
+from sysdroid.core.devices import DeviceTracker
 from sysdroid.core.users import AndroidUserController
 from sysdroid.ui import kit as ui_kit
 from sysdroid.ui import theme
@@ -28,6 +30,10 @@ from sysdroid.ui.task_panel import TaskPanel
 
 
 DOCK_LOG, DOCK_TASKS = 0, 1
+# The selected device left the ADB device list; it stays selected instead of
+# silently switching every page to another phone.
+DISCONNECTED = "disconnected"
+STATE_LABELS = {DISCONNECTED: "已断开"}
 
 
 def _setting_bool(value, default: bool) -> bool:
@@ -73,6 +79,9 @@ class AndroidToolboxWindow(QMainWindow):
         self._devices: dict[str, Device] = {}
         self._pending: dict[str, Callable[[Task], None]] = {}
         self._refresh_id = ""
+        self._refresh_again = False
+        self._status_task_id = ""
+        self._await: dict | None = None
         self._logs: list[tuple[str, str]] = []
         self._closing = False
         self._settings = QSettings(str(DATA_DIR / "workspace.ini"), QSettings.Format.IniFormat)
@@ -92,6 +101,16 @@ class AndroidToolboxWindow(QMainWindow):
         self.runner.error.connect(lambda message: self._write_log("[ERROR] " + message))
         self.runner.task_added.connect(self._task_added)
         self.runner.task_finished.connect(self._task_finished)
+        self._tracker = DeviceTracker(self)
+        self._tracker.changed.connect(self._tracked_devices_changed)
+        self._tracker.server_changed.connect(self._tracker_server_changed)
+        self._auto_refresh_timer = QTimer(self)
+        self._auto_refresh_timer.setSingleShot(True)
+        self._auto_refresh_timer.setInterval(300)
+        self._auto_refresh_timer.timeout.connect(lambda: self._refresh_devices(auto=True))
+        self._await_timer = QTimer(self)
+        self._await_timer.setInterval(1500)
+        self._await_timer.timeout.connect(self._await_tick)
         self._select_page("home")
         process_columns = self._settings.value("processes/columns")
         if isinstance(process_columns, str):
@@ -132,6 +151,7 @@ class AndroidToolboxWindow(QMainWindow):
         else:
             self._write_log(f"[INFO] {APP_NAME} 已启动；正在查询真实设备。")
             QTimer.singleShot(0, self._refresh_devices)
+            self._tracker.start()
 
     def _themed(self, target, key: str):
         """Register an action or list item whose line icon follows the theme colors."""
@@ -404,6 +424,14 @@ class AndroidToolboxWindow(QMainWindow):
         self.remount_button = self._button("ADB Remount", self._adb_remount)
         self.remount_button.setEnabled(False)
         actions.addWidget(self.remount_button)
+        self.reboot_button = QPushButton("重启设备")
+        self.reboot_button.setToolTip("重启当前设备；重启系统后会自动等待设备重新上线并刷新状态")
+        reboot_menu = QMenu(self.reboot_button)
+        reboot_menu.addAction("重启系统", lambda: self._adb_reboot(""))
+        reboot_menu.addAction("重启到 Recovery", lambda: self._adb_reboot("recovery"))
+        reboot_menu.addAction("重启到 Bootloader", lambda: self._adb_reboot("bootloader"))
+        self.reboot_button.setMenu(reboot_menu)
+        actions.addWidget(self.reboot_button)
         actions.addStretch()
         info.addSpacing(6)
         info.addLayout(actions)
@@ -624,7 +652,7 @@ class AndroidToolboxWindow(QMainWindow):
         self.current_device_input.setText(self._device_serial)
         self.device_model.setText(device.model or device.serial if device else "未选择设备")
         self.device_details.setText(f"Product：{device.product or '—'}  ·  Device：{device.device or '—'}  ·  Transport：{device.transport or '—'}" if device else "Product / Device / Transport：—")
-        self.connected.setText("设备已连接" if state == "device" else (state or "设备未连接"))
+        self.connected.setText("设备已连接" if state == "device" else (STATE_LABELS.get(state, state) or "设备未连接"))
         ui_kit.set_state(self.connected, "ok" if state == "device" else ("warn" if state else "off"))
         self.status_serial.setText("ADB：" + (self._device_serial or "未选择设备"))
         self.command_page.set_device(self._device_serial, state)
@@ -634,37 +662,82 @@ class AndroidToolboxWindow(QMainWindow):
         for page in (self.settings_page, self.apk_page, self.process_page):
             page.set_device(self._device_serial, state)
         if changed:
+            self._status_task_id = ""
             self.android_version.setText("Android：未检测")
             for name in self.privilege_labels:
                 self._set_pill(name, f"{name}：未检测", "off")
             self.remount_button.setEnabled(False)
             if self._device_serial:
-                self._write_log(f"[INFO] 当前设备：{self._device_serial} · {state}")
+                self._write_log(f"[INFO] 当前设备：{self._device_serial} · {STATE_LABELS.get(state, state)}")
+            awaiting = self._await is not None and self._await["serial"] == self._device_serial
+            if state == "device" and not awaiting and not self._closing:
+                # Selecting (or getting back) an online device always shows its real status.
+                QTimer.singleShot(0, lambda serial=self._device_serial: self._auto_query_status(serial))
+            elif awaiting:
+                self.android_version.setText("Android：等待设备重新连接…")
 
-    def _refresh_devices(self) -> None:
+    def _auto_query_status(self, serial: str) -> None:
+        if serial == self._device_serial and not self._status_task_id:
+            self._query_status(auto=True)
+
+    def _tracked_devices_changed(self, states: dict) -> None:
+        known = {serial: device.state for serial, device in self._devices.items() if device.state != DISCONNECTED}
+        if states != known:
+            self._auto_refresh_timer.start()
+
+    def _tracker_server_changed(self, connected: bool) -> None:
+        if connected:
+            self._write_log("[INFO] 已连接 ADB Server，设备插拔与状态变化会自动刷新。")
+            self._auto_refresh_timer.start()
+        elif not self._closing:
+            self.connection_note.setText("与 ADB Server 的跟踪连接已断开；Server 恢复后会自动重新跟踪。")
+            self._write_log("[WARN] ADB Server 跟踪连接已断开（Server 可能已停止）；恢复后自动重新跟踪。")
+
+    def _refresh_devices(self, auto: bool = False) -> None:
         if self._runtime_error:
-            self._write_log("[ERROR] " + self._runtime_error)
+            if not auto:
+                self._write_log("[ERROR] " + self._runtime_error)
             return
-        if self._refresh_id and any(task.id == self._refresh_id for task in self.runner.active()):
+        if self._refresh_id:
+            # Coalesce: one more refresh after the running one, so no change is missed.
+            self._refresh_again = True
             return
-        task = self._run_adb("获取设备列表", ["devices", "-l"], callback=self._devices_received)
+        # Automatic refreshes (tracking, waiting for reconnect) stay out of the task list and log.
+        task = self._run_adb("获取设备列表", ["devices", "-l"], callback=self._devices_received, transient=bool(auto))
         self._refresh_id = task.id
 
     def _devices_received(self, task: Task) -> None:
+        if task.id == self._refresh_id:
+            self._refresh_id = ""
         if task.status != "succeeded":
             self.connection_note.setText("刷新失败，请查看任务错误输出")
             self.device_hint.setText("设备列表已失效：刷新失败")
+            if task.transient:
+                self._write_log("[WARN] 自动刷新设备列表失败：" + ((significant_stderr(task.stderr) or task.stdout).strip()[-300:] or STATUS_LABELS[task.status]))
             self._set_devices([])
-            return
-        devices = parse_devices(task.stdout)
-        self._set_devices(devices)
-        self.connection_note.setText(f"ADB Server 已响应 · 上次刷新 {datetime.now():%H:%M:%S}")
-        self.device_hint.setText(f"已发现 {len(devices)} 台设备 · 在线 {sum(device.state == 'device' for device in devices)}")
-        self._write_log(f"[OK] 获取到 {len(devices)} 台真实设备")
+        else:
+            devices = parse_devices(task.stdout)
+            self._set_devices(devices)
+            self.connection_note.setText(f"ADB Server 已响应 · 上次刷新 {datetime.now():%H:%M:%S}")
+            self.device_hint.setText(f"已发现 {len(devices)} 台设备 · 在线 {sum(device.state == 'device' for device in devices)}")
+            if not task.transient:
+                self._write_log(f"[OK] 获取到 {len(devices)} 台真实设备")
+            self._check_await()
+        if self._refresh_again:
+            self._refresh_again = False
+            QTimer.singleShot(0, lambda: self._refresh_devices(auto=True))
 
     def _set_devices(self, devices: list[Device]) -> None:
         previous = self._device_serial
-        self._devices = {device.serial: device for device in devices}
+        listed = {device.serial: device for device in devices}
+        placeholder = None
+        if previous and previous not in listed:
+            old = self._devices.get(previous)
+            placeholder = Device(previous, DISCONNECTED, old.model if old else "", old.product if old else "",
+                                 old.device if old else "")
+        self._devices = dict(listed)
+        if placeholder is not None:
+            self._devices[previous] = placeholder
         self.device_selector.blockSignals(True)
         self.device_selector.clear()
         self.device_table.setRowCount(len(devices))
@@ -672,16 +745,21 @@ class AndroidToolboxWindow(QMainWindow):
             self.device_selector.addItem(f"{device.serial} · {device.state}", device.serial)
             for col, value in enumerate((device.serial, device.state, device.model, device.product, device.device, device.transport)):
                 self.device_table.setItem(row, col, QTableWidgetItem(value))
-        if not devices:
+        if placeholder is not None:
+            self.device_selector.addItem(f"{previous} · {STATE_LABELS[DISCONNECTED]}", previous)
+        if not devices and placeholder is None:
             self.device_selector.addItem("未发现设备", "")
-        index = self.device_selector.findData(previous)
+        index = self.device_selector.findData(previous) if previous else -1
         if index < 0:
+            # Only when nothing was selected yet: pick the first online device.
             index = next((i for i, device in enumerate(devices) if device.state == "device"), 0)
         self.device_selector.setCurrentIndex(index)
         self.device_selector.blockSignals(False)
         self._device_changed(index)
-        if devices:
+        if 0 <= index < len(devices):
             self.device_table.selectRow(index)
+        else:
+            self.device_table.clearSelection()
 
     def _highlighted_serial(self) -> str:
         row = self.device_table.currentRow()
@@ -711,10 +789,11 @@ class AndroidToolboxWindow(QMainWindow):
         action.setEnabled(":" in serial)
         menu.exec(self.device_table.viewport().mapToGlobal(position))
 
-    def _require_device(self) -> bool:
+    def _require_device(self, quiet: bool = False) -> bool:
         device = self._devices.get(self._device_serial)
         if not device or device.state != "device":
-            self._write_log("[WARN] 请先选择 state=device 的在线设备。")
+            if not quiet:
+                self._write_log("[WARN] 请先选择 state=device 的在线设备。")
             return False
         return True
 
@@ -738,18 +817,33 @@ class AndroidToolboxWindow(QMainWindow):
             return
         self._run_adb("断开无线 ADB", ["disconnect", serial], callback=lambda task: self._refresh_devices())
 
-    def _query_status(self) -> None:
-        if not self._require_device():
+    def _query_status(self, auto: bool = False) -> None:
+        if not self._require_device(quiet=bool(auto)):
             return
         script = "id -u; getprop ro.debuggable; getprop ro.build.version.release; cat /proc/mounts"
-        self._run_adb("检测设备特权状态", ["shell", script], self._device_serial, callback=self._status_received)
+        task = self._run_adb("检测设备特权状态", ["shell", script], self._device_serial,
+                             callback=self._status_received, transient=bool(auto))
+        self._status_task_id = task.id
+        self.android_version.setText("Android：正在检测…")
+
+    def _status_failed(self, reason: str) -> None:
+        self.android_version.setText("Android：状态检测失败 · 点击「获取状态」重试")
+        for name in self.privilege_labels:
+            self._set_pill(name, f"{name}：检测失败", "warn")
+        self.remount_button.setEnabled(False)
+        self._write_log(f"[WARN] 设备状态检测失败：{reason}")
 
     def _status_received(self, task: Task) -> None:
-        if task.status != "succeeded" or task.serial != self._device_serial:
+        if task.id != self._status_task_id or task.serial != self._device_serial:
+            return  # superseded by a newer query or a device change
+        self._status_task_id = ""
+        if task.status != "succeeded":
+            detail = (significant_stderr(task.stderr) or task.stdout).strip()[-300:]
+            self._status_failed(f"{STATUS_LABELS.get(task.status, task.status)}" + (f" · {detail}" if detail else ""))
             return
         lines = task.stdout.splitlines()
         if len(lines) < 3:
-            self._write_log("[ERROR] 设备特权状态输出不完整，请查看任务输出。")
+            self._status_failed("输出不完整，请查看任务输出")
             return
         root = lines[0].strip() == "0"
         self._set_pill("Root", "Root：" + ("是" if root else "否"), "ok" if root else "off")
@@ -768,13 +862,90 @@ class AndroidToolboxWindow(QMainWindow):
 
     def _adb_root(self) -> None:
         if self._require_device() and QMessageBox.question(self, "ADB Root", "将重启当前设备的 adbd；仅调试构建支持。继续？") == QMessageBox.StandardButton.Yes:
-            self._run_adb("ADB Root", ["root"], self._device_serial,
-                          callback=lambda task: self._refresh_devices())
+            self._run_adb("ADB Root", ["root"], self._device_serial, callback=self._root_finished)
+
+    def _root_finished(self, task: Task) -> None:
+        if task.status != "succeeded":
+            return  # the failure reply is already in the log
+        if "already running as root" in task.stdout.lower():
+            if task.serial == self._device_serial:
+                self._query_status()
+            return
+        # adbd restarts: the device drops off and comes back; never refresh mid-restart.
+        self._await_device(task.serial, "adbd 以 root 重启", timeout=30, settle=2.5)
 
     def _adb_remount(self) -> None:
         if self._require_device() and QMessageBox.question(self, "ADB Remount", "请求将系统分区重新挂载为可写。继续？") == QMessageBox.StandardButton.Yes:
-            self._run_adb("ADB Remount", ["remount"], self._device_serial, timeout=30,
-                          callback=lambda task: self._query_status())
+            self._run_adb("ADB Remount", ["remount"], self._device_serial, timeout=60, callback=self._remount_finished)
+
+    def _remount_finished(self, task: Task) -> None:
+        if task.serial == self._device_serial:
+            self._query_status()
+        if task.status == "succeeded" and "reboot" in task.stdout.lower():
+            self._write_log("[WARN] Remount 提示需要重启设备后才能生效，可使用「重启设备 → 重启系统」。")
+
+    def _adb_reboot(self, target: str = "") -> None:
+        if not self._require_device():
+            return
+        label = {"": "重启系统", "recovery": "重启到 Recovery", "bootloader": "重启到 Bootloader"}[target]
+        serial = self._device_serial
+        if QMessageBox.question(self, label, f"{label}：{serial}\n设备上正在运行的任务会中断。继续？") != QMessageBox.StandardButton.Yes:
+            return
+        self._run_adb(label, ["reboot", *([target] if target else [])], serial, timeout=20,
+                      callback=lambda task: self._reboot_finished(task, target))
+
+    def _reboot_finished(self, task: Task, target: str) -> None:
+        if task.status != "succeeded":
+            return
+        if target:
+            self._write_log(f"[INFO] {task.serial} 将进入 {target}，不会以 device 状态上线；它会保持选中并显示为已断开。")
+            return
+        self._await_device(task.serial, "系统重启", timeout=180, settle=8)
+
+    def _await_device(self, serial: str, reason: str, timeout: int, settle: float) -> None:
+        now = time.monotonic()
+        self._await = {"serial": serial, "reason": reason, "timeout": timeout,
+                       "deadline": now + timeout, "earliest": now + settle}
+        if serial == self._device_serial:
+            self._status_task_id = ""
+            self.android_version.setText("Android：等待设备重新连接…")
+            for name in self.privilege_labels:
+                self._set_pill(name, f"{name}：等待重连", "off")
+            self.remount_button.setEnabled(False)
+        self.connection_note.setText(f"正在等待 {serial} 重新上线（{reason}）…")
+        self._write_log(f"[INFO] 正在等待 {serial} 重新上线（{reason}），最长 {timeout} 秒。")
+        self._await_timer.start()
+
+    def _await_tick(self) -> None:
+        waiting = self._await
+        if waiting is None:
+            self._await_timer.stop()
+            return
+        now = time.monotonic()
+        if now >= waiting["deadline"]:
+            self._await = None
+            self._await_timer.stop()
+            message = f"{waiting['serial']} 未在 {waiting['timeout']} 秒内重新上线；设备恢复后会自动刷新，也可手动刷新。"
+            self.connection_note.setText(message)
+            self._write_log("[WARN] " + message)
+            if waiting["serial"] == self._device_serial:
+                self._status_failed("设备未重新上线")
+            return
+        if now >= waiting["earliest"]:
+            self._refresh_devices(auto=True)
+
+    def _check_await(self) -> None:
+        waiting = self._await
+        if waiting is None or time.monotonic() < waiting["earliest"]:
+            return
+        device = self._devices.get(waiting["serial"])
+        if device is None or device.state != "device":
+            return
+        self._await = None
+        self._await_timer.stop()
+        self._write_log(f"[OK] {waiting['serial']} 已重新上线（{waiting['reason']}）。")
+        if waiting["serial"] == self._device_serial:
+            self._query_status(auto=True)
 
     def _adb_version(self) -> None:
         task = self._run_adb("ADB 版本", ["version"])
@@ -791,8 +962,8 @@ class AndroidToolboxWindow(QMainWindow):
                           callback=lambda task: self._refresh_devices() if task.status == "succeeded" else None)
 
     def _run_adb(self, title: str, args: list[str], serial: str = "", timeout: int = 10,
-                 callback: Callable[[Task], None] | None = None) -> Task:
-        task = self.runner.start_adb(title, args, serial=serial, timeout=timeout)
+                 callback: Callable[[Task], None] | None = None, transient: bool = False) -> Task:
+        task = self.runner.start_adb(title, args, serial=serial, timeout=timeout, transient=transient)
         if callback:
             self._pending[task.id] = callback
         return task
@@ -912,6 +1083,9 @@ class AndroidToolboxWindow(QMainWindow):
             return
         for page in self._device_pages.values():
             page.set_active(False)
+        self._tracker.stop()
+        self._auto_refresh_timer.stop()
+        self._await_timer.stop()
         self.runner.flush_history()
         self._save_workspace()
         event.accept()
