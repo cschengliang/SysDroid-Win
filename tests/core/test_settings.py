@@ -46,12 +46,46 @@ def names_output(*names):
     return "".join(f"Row: {index} name={name}\n" for index, name in enumerate(names)) if names else "No result found.\n"
 
 
-def finish_read(runner, name, value, *, after_exists=None):
+def script_lines(script):
+    """Split a generated shell script into commands, keeping quoted newlines inside their command."""
+    commands, pending = [], ""
+    for line in script.split("\n"):
+        pending = f"{pending}\n{line}" if pending else line
+        try:
+            shlex.split(pending)
+        except ValueError:
+            continue
+        commands.append(pending)
+        pending = ""
+    assert not pending
+    return commands
+
+
+def framed_output(task, respond):
+    """Answer a printf-framed settings script; ``respond(kind, index)`` returns each record body."""
+    records = []
+    lines = script_lines(task.args[-1])
+    for offset in range(0, len(lines), 4):
+        _, nonce, index, kind = shlex.split(lines[offset])[1].replace("\\n", "").split(" ")
+        body, code = respond(kind, index)
+        records.append(f"BEGIN {nonce} {index} {kind}\n{body}\nEND {nonce} {index} {kind} {code}\n")
+    return "".join(records)
+
+
+def finish_read(runner, name, value, *, after_exists=None, mutate="", mutate_code=0):
+    """Finish the latest read (or change) script with a single observed value."""
     exists = value is not None
-    runner.finish(runner.requests[-1], names_output(name) if exists else names_output())
-    runner.finish(runner.requests[-1], f"Row: 0 value={value}\n" if exists else names_output())
     exists_after = exists if after_exists is None else after_exists
-    runner.finish(runner.requests[-1], names_output(name) if exists_after else names_output())
+
+    def respond(kind, index):
+        if kind == "mutate":
+            return mutate.removesuffix("\n"), mutate_code
+        if kind == "before":
+            return (names_output(name) if exists else names_output()).removesuffix("\n"), 0
+        if kind == "get":
+            return (f"Row: 0 value={value}" if exists else names_output().removesuffix("\n")), 0
+        return (names_output(name) if exists_after else names_output()).removesuffix("\n"), 0
+    runner.finish(runner.requests[-1], framed_output(runner.requests[-1], respond))
 
 
 class DeviceSettings:
@@ -95,7 +129,7 @@ class DeviceSettings:
 
     def batch_output(self, task):
         records = []
-        lines = task.args[-1].splitlines()
+        lines = script_lines(task.args[-1])
         for offset in range(0, len(lines), 4):
             begin = shlex.split(lines[offset])[1].replace("\\n", "\n")
             response = self._response(shlex.split(lines[offset + 1]))
@@ -221,50 +255,94 @@ def test_business_readback_mismatch_exposes_actual_value_not_requested_success(
         controller.write("key", "wanted")
     else:
         controller.delete("key")
-    settings_runner.finish(settings_runner.requests[-1])
-    assert controller.busy
-    finish_read(settings_runner, "key", observed)
+    assert len(settings_runner.requests) == 1
+    finish_read(settings_runner, "key", observed, mutate="" if operation == "write" else "Deleted 1 rows")
     assert controller.values["key"] == SettingValue(observed is not None, observed)
     assert controller.error and "成功" not in controller.status
 
 
-@pytest.mark.parametrize("stage", ["before", "get", "after"])
-@pytest.mark.parametrize("failure", ["stderr", "nonzero", "diagnostic"])
+@pytest.mark.parametrize("failure", ["stderr", "nonzero", "diagnostic", "record-rc", "truncated"])
 def test_failed_readback_preserves_known_snapshot_and_never_acknowledges_command(
-        settings_runner, controller, stage, failure):
+        settings_runner, controller, failure):
     old = SettingValue(True, "previous")
     controller.values = {"key": old}
-    controller.write("key", "wanted")
-    settings_runner.finish(settings_runner.requests[-1])
-    if stage != "before":
-        settings_runner.finish(settings_runner.requests[-1], names_output("key"))
-    if stage == "after":
-        settings_runner.finish(settings_runner.requests[-1], "Row: 0 value=wanted\n")
-    if failure == "stderr" or (failure == "diagnostic" and stage == "get"):
-        settings_runner.finish(settings_runner.requests[-1], "wanted\n", "SecurityException: denied")
+    task = controller.write("key", "wanted")
+    assert "content insert" in task.args[-1] and "content query" in task.args[-1]
+
+    def respond(kind, index):
+        if kind == "get" and failure == "diagnostic":
+            return "Error: provider permission denied", 0
+        if kind == "after" and failure == "record-rc":
+            return "Row: 0 name=key", 1
+        return {"mutate": "", "get": "Row: 0 value=wanted"}.get(kind, "Row: 0 name=key"), 0
+    output = framed_output(task, respond)
+    if failure == "stderr":
+        settings_runner.finish(task, output, "SecurityException: denied")
     elif failure == "nonzero":
-        settings_runner.finish(settings_runner.requests[-1], "partial stdout", "device offline", 1)
+        settings_runner.finish(task, output, "device offline", 1)
+    elif failure == "truncated":
+        settings_runner.finish(task, output[:len(output) // 2])
     else:
-        settings_runner.finish(settings_runner.requests[-1], "Error: provider permission denied\n")
+        settings_runner.finish(task, output)
     assert controller.values == {"key": old}
     assert controller.error and "成功" not in controller.status
     assert "未确认" in controller.status and not controller.busy
 
 
-@pytest.mark.parametrize("stage", ["command", "before", "get"])
-def test_readback_submission_failure_remains_unconfirmed(settings_runner, controller, stage):
+@pytest.mark.parametrize("operation", ["write", "delete"])
+def test_change_submission_failure_reports_not_executed(settings_runner, controller, operation):
     original = SettingValue(True, "known")
     controller.values = {"key": original}
-    controller.write("key", "wanted")
-    if stage != "command":
-        settings_runner.finish(settings_runner.requests[-1])
-    if stage == "get":
-        settings_runner.finish(settings_runner.requests[-1], names_output("key"))
-    settings_runner.start_error = OSError("readback launch failure")
-    settings_runner.finish(settings_runner.requests[-1],
-                           "" if stage == "command" else names_output("key") if stage == "before" else "Row: 0 value=wanted\n")
+    settings_runner.start_error = OSError("launch failure")
+    with pytest.raises(ValueError):
+        controller.write("key", "wanted") if operation == "write" else controller.delete("key")
     assert controller.values == {"key": original} and not controller.busy
-    assert "未确认" in controller.status and "readback launch failure" in controller.error
+    assert "未确认" not in controller.status and "launch failure" in controller.error
+
+
+@pytest.mark.parametrize("operation", ["read", "write", "delete"])
+def test_single_value_operations_take_one_round_trip(settings_runner, controller, operation):
+    device = DeviceSettings({(10, "secure", "key"): "old"})
+    getattr(controller, operation)(*(("key", "new") if operation == "write" else ("key",)))
+    device.answer(settings_runner)
+    assert len(settings_runner.requests) == 1 and not controller.busy and not controller.error
+
+
+def test_write_many_writes_and_verifies_all_names_in_one_script(settings_runner, controller):
+    device = DeviceSettings({(10, "global", "a"): "1", (10, "secure", "shown"): "x"})
+    controller.names = ("shown",)
+    controller.values = {"shown": SettingValue(True, "x")}
+    controller.write_many("global", [("a", "0.5"), ("b", "0.5"), ("c", "0.5")])
+    device.answer(settings_runner)
+    assert len(settings_runner.requests) == 1 and not controller.busy
+    assert all(device.values[(10, "global", name)] == "0.5" for name in "abc")
+    assert "已写入 3 项" in controller.status and not controller.error
+    # Another namespace's readback never leaks into the browsed snapshot.
+    assert controller.names == ("shown",) and set(controller.values) == {"shown"}
+
+
+def test_write_many_reports_each_mismatch(settings_runner, controller):
+    controller.set_context("global", 10)
+    task = controller.write_many("global", [("a", "1"), ("b", "2")])
+
+    def respond(kind, index):
+        name = "ab"[int(index.removeprefix("m"))]
+        if kind == "mutate":
+            return "", 0
+        if kind == "get":
+            return f"Row: 0 value={'1' if name == 'a' else '9'}", 0
+        return f"Row: 0 name={name}", 0
+    settings_runner.finish(task, framed_output(task, respond))
+    assert controller.values == {"a": SettingValue(True, "1"), "b": SettingValue(True, "9")}
+    assert "不一致" in controller.status and "b：请求 '2'，实际 '9'" in controller.error
+    assert "a：" not in controller.error
+
+
+@pytest.mark.parametrize("changes", [[], [("a", "1")] * 2, [(str(i), "1") for i in range(5)], [("a", "nul\0")]])
+def test_write_many_rejects_invalid_batches(settings_runner, controller, changes):
+    with pytest.raises(ValueError):
+        controller.write_many("global", changes)
+    assert not settings_runner.requests
 
 
 @pytest.mark.parametrize("status,code", [("failed", 7), ("timed_out", None), ("cancelled", None)])
@@ -282,7 +360,7 @@ def test_failed_read_preserves_previous_value_and_real_transport_error(settings_
 def test_exit_zero_mutation_diagnostics_do_not_start_verification(settings_runner, controller, output):
     controller.write("key", "wanted")
     count = len(settings_runner.requests)
-    settings_runner.finish(settings_runner.requests[-1], output)
+    finish_read(settings_runner, "key", None, mutate=output)
     assert len(settings_runner.requests) == count
     assert "key" not in controller.values and controller.error and "成功" not in controller.status
 
@@ -503,8 +581,7 @@ def test_changed_context_drops_late_reads_and_writes(settings_runner, controller
 
 def test_task_added_context_reentrancy_cannot_overwrite_new_request(settings_runner, controller):
     def switch(task):
-        command = tokens(task)
-        if command[:2] == ["content", "insert"]:
+        if "content insert" in task.args[-1]:
             controller.set_context("global", 0)
             controller.refresh()
     settings_runner.task_added.connect(switch)
@@ -550,8 +627,8 @@ def test_invalid_value_and_unavailable_user_do_not_submit(settings_runner, contr
 
 
 def mutation_count(runner):
-    return sum(command[0] == "content" and command[1] in {"insert", "delete"}
-               for command in map(tokens, runner.requests))
+    return sum(task.args[-1].count("content insert") + task.args[-1].count("content delete")
+               for task in runner.requests)
 
 
 def test_page_lazy_discovery_and_repeated_activation_preserve_user_selection(settings_runner):
