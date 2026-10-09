@@ -8,7 +8,8 @@ from pathlib import Path
 from PySide6.QtCore import QSignalBlocker, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem,
     QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QTabWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
@@ -16,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from sysdroid.core.backend import STATUS_LABELS, TERMINAL_STATUSES, Task, TaskRunner, powershell_command
 from sysdroid.core.commands import (
-    CATEGORIES, EXECUTION_TYPES, Command, CommandStore, ParameterMemory, PreparedCommand, StorageError,
+    CATEGORIES, EXECUTION_TYPES, Command, CommandStore, ParameterMemory, PreparedCommand, StorageError, Workflow,
     is_remote_shell, parse_payload, prepare_command, variable_names,
 )
 from sysdroid.ui import kit as ui_kit
@@ -71,10 +72,12 @@ class ExecutionDialog(QDialog):
     """Parameter fields are data, except the explicitly acknowledged remote script."""
     submitted = Signal(object)
 
-    def __init__(self, page: CommandLibraryPage, commands: list[Command], command_id: str | None = None) -> None:
+    def __init__(self, page: CommandLibraryPage, commands: list[Command], command_id: str | None = None,
+                 workflow_name: str | None = None) -> None:
         super().__init__(page)
         self.page = page
         self.commands = commands
+        self.workflow_name = workflow_name
         self.fields: dict[tuple[int, str], QLineEdit] = {}
         self.prepared: list[PreparedCommand] = []
         self.setWindowTitle("执行命令 · 参数预览")
@@ -91,8 +94,14 @@ class ExecutionDialog(QDialog):
         for command in commands:
             self.selector.addItem(command.name, command.id)
         self.selector.setCurrentIndex(max(0, self.selector.findData(command_id)))
-        layout.addWidget(QLabel("选择命令（可输入名称查找）"))
+        selector_label = QLabel("选择命令（可输入名称查找）")
+        layout.addWidget(selector_label)
         layout.addWidget(self.selector)
+        if workflow_name is not None:
+            # Workflows run every step in order; there is nothing to pick.
+            self.setWindowTitle(f"执行工作流 · {workflow_name}")
+            selector_label.setText(f"工作流「{workflow_name}」共 {len(commands)} 步，按顺序执行；任一步失败即停止后续步骤。")
+            self.selector.hide()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         self.parameter_widget = QWidget()
@@ -113,13 +122,15 @@ class ExecutionDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
         buttons.rejected.connect(self.reject)
-        self.run_button = buttons.addButton("执行命令", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.run_button = buttons.addButton("执行工作流" if workflow_name is not None else "执行命令", QDialogButtonBox.ButtonRole.AcceptRole)
         self.run_button.clicked.connect(self._submit)
         layout.addWidget(buttons)
         self.selector.currentIndexChanged.connect(self._build_fields)
         self._build_fields()
 
     def _selected_commands(self) -> list[Command]:
+        if self.workflow_name is not None:
+            return list(self.commands)
         command_id = self.selector.currentData()
         return [command for command in self.commands if command.id == command_id]
 
@@ -132,7 +143,7 @@ class ExecutionDialog(QDialog):
         self.remote_ack.setChecked(False)
         has_remote = False
         for index, command in enumerate(self._selected_commands()):
-            box = QGroupBox(command.name)
+            box = QGroupBox(f"第 {index + 1} 步 · {command.name}" if self.workflow_name is not None else command.name)
             form = QFormLayout(box)
             form.addRow(_note(command.description or "此命令无描述"))
             form.addRow(_note(f"执行类型：{EXECUTION_TYPES[command.execution_type]}"))
@@ -226,6 +237,7 @@ class CommandLibraryPage(QWidget):
         self.parameters = ParameterMemory()
         self.editing_id: str | None = None
         self.execution_dialog: ExecutionDialog | None = None
+        self._workflow_run: dict[str, object] | None = None
         self._latest: dict[str, Task] = {}
         self._library_rows: dict[str, int] = {}
         self._management_rows: dict[str, int] = {}
@@ -255,7 +267,9 @@ class CommandLibraryPage(QWidget):
         self._build_editor()
         self._build_command_management()
         self._build_history()
+        self._build_workflows()
         self.tabs.currentChanged.connect(self._tab_changed)
+        runner.task_finished.connect(self._workflow_task_finished)
         runner.task_added.connect(self._task_added)
         runner.task_changed.connect(self._task_update)
         runner.history_changed.connect(self._refresh_history)
@@ -477,6 +491,238 @@ class CommandLibraryPage(QWidget):
         ui_kit.install_empty_state(self.history_table, lambda: "暂无执行历史\n在命令库执行命令后会显示在这里")
         self.tabs.addTab(page, "执行历史")
 
+    def _build_workflows(self) -> None:
+        page = QWidget()
+        layout = ui_kit.tab_layout(QVBoxLayout(page))
+        layout.addWidget(ui_kit.info_note("工作流按顺序执行多条命令，任一步失败即停止。", "工作流按顺序执行已保存的命令；执行前统一填写各步骤参数并预览，提交时固定当前设备。任一步非零退出、失败、超时或被停止，后续步骤都不会执行。"))
+        body = QHBoxLayout()
+        left = QVBoxLayout()
+        left.addWidget(QLabel("工作流"))
+        self.workflow_list = QListWidget()
+        self.workflow_list.setObjectName("workflowList")
+        self.workflow_list.currentItemChanged.connect(lambda *unused: self._workflow_selected())
+        left.addWidget(self.workflow_list, 1)
+        workflow_actions = QHBoxLayout()
+        self.workflow_new_button = _button("新建", self.new_workflow, workflow_actions)
+        self.workflow_rename_button = _button("重命名", self.rename_workflow, workflow_actions)
+        self.workflow_delete_button = _button("删除", self.delete_workflow, workflow_actions)
+        left.addLayout(workflow_actions)
+        body.addLayout(left, 1)
+        steps_group = QGroupBox("步骤")
+        right = QVBoxLayout(steps_group)
+        self.step_list = QListWidget()
+        self.step_list.setObjectName("workflowSteps")
+        self.step_list.currentRowChanged.connect(lambda *unused: self._update_workflow_buttons())
+        right.addWidget(self.step_list, 1)
+        add_row = QHBoxLayout()
+        self.step_command = QComboBox()
+        self.step_command.setObjectName("workflowStepCommand")
+        add_row.addWidget(self.step_command, 1)
+        self.step_add_button = _button("添加步骤", self.add_workflow_step, add_row)
+        right.addLayout(add_row)
+        step_actions = QHBoxLayout()
+        self.step_up_button = _button("上移", lambda: self.move_workflow_step(-1), step_actions)
+        self.step_down_button = _button("下移", lambda: self.move_workflow_step(1), step_actions)
+        self.step_remove_button = _button("移除步骤", self.remove_workflow_step, step_actions)
+        step_actions.addStretch()
+        right.addLayout(step_actions)
+        body.addWidget(steps_group, 2)
+        layout.addLayout(body, 1)
+        run_row = QHBoxLayout()
+        self.workflow_status = _note("未运行")
+        self.workflow_status.setObjectName("workflowStatus")
+        run_row.addWidget(self.workflow_status, 1)
+        self.run_workflow_button = _button("运行工作流…", self.run_workflow, run_row)
+        self.stop_workflow_button = _button("停止工作流", self.stop_workflow, run_row)
+        layout.addLayout(run_row)
+        self.tabs.addTab(page, "工作流")
+
+    def _workflow_id(self) -> str | None:
+        item = self.workflow_list.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def _ask_name(self, title: str, text: str = "") -> str | None:
+        name, accepted = QInputDialog.getText(self, title, "工作流名称", text=text)
+        name = name.strip()
+        return name if accepted and name else None
+
+    def _refresh_workflows(self, selected_id: str | None = None) -> None:
+        selected_id = selected_id or self._workflow_id()
+        with QSignalBlocker(self.workflow_list):
+            self.workflow_list.clear()
+            for workflow in sorted(self.store.workflows.values(), key=lambda value: value.name.casefold()):
+                item = QListWidgetItem(f"{workflow.name}（{len(workflow.steps)} 步）")
+                item.setData(Qt.ItemDataRole.UserRole, workflow.id)
+                self.workflow_list.addItem(item)
+                if workflow.id == selected_id:
+                    self.workflow_list.setCurrentItem(item)
+        if self.workflow_list.currentItem() is None and self.workflow_list.count():
+            with QSignalBlocker(self.workflow_list):
+                self.workflow_list.setCurrentRow(0)
+        current = self.step_command.currentData()
+        with QSignalBlocker(self.step_command):
+            self.step_command.clear()
+            for command in sorted(self.store.commands.values(), key=lambda value: value.name.casefold()):
+                self.step_command.addItem(command.name + ("" if command.show_in_library else "（命令库中隐藏）"), command.id)
+            self.step_command.setCurrentIndex(max(0, self.step_command.findData(current)))
+        self._workflow_selected()
+
+    def _workflow_selected(self, step_row: int | None = None) -> None:
+        workflow = self.store.workflows.get(self._workflow_id())
+        self.step_list.clear()
+        for index, step in enumerate(workflow.steps if workflow else []):
+            command = self.store.commands.get(step)
+            self.step_list.addItem(f"{index + 1}. {command.name if command else step}" + (f" · {command.template}" if command else ""))
+        if step_row is not None and 0 <= step_row < self.step_list.count():
+            self.step_list.setCurrentRow(step_row)
+        self._update_workflow_buttons()
+
+    def _update_workflow_buttons(self) -> None:
+        editable = not self.store.error
+        workflow = self.store.workflows.get(self._workflow_id())
+        row = self.step_list.currentRow()
+        running = self._workflow_run is not None
+        self.workflow_new_button.setEnabled(editable)
+        for button in (self.workflow_rename_button, self.workflow_delete_button):
+            button.setEnabled(editable and workflow is not None)
+        self.step_add_button.setEnabled(editable and workflow is not None and self.step_command.count() > 0)
+        self.step_remove_button.setEnabled(editable and workflow is not None and row >= 0)
+        self.step_up_button.setEnabled(editable and workflow is not None and row > 0)
+        self.step_down_button.setEnabled(editable and workflow is not None and 0 <= row < self.step_list.count() - 1)
+        self.run_workflow_button.setEnabled(workflow is not None and bool(workflow.steps) and not running and not self.runtime_error)
+        self.stop_workflow_button.setEnabled(running)
+
+    def _save_workflow(self, workflow: Workflow, step_row: int | None = None) -> bool:
+        try:
+            self.store.save_workflow(workflow)
+        except (ValueError, StorageError) as exc:
+            self._error(str(exc))
+            return False
+        self._refresh_workflows(workflow.id)
+        self._workflow_selected(step_row)
+        return True
+
+    def new_workflow(self) -> None:
+        name = self._ask_name("新建工作流")
+        if name:
+            self._save_workflow(Workflow(uuid.uuid4().hex, name[:100], []))
+
+    def rename_workflow(self) -> None:
+        workflow = self.store.workflows.get(self._workflow_id())
+        if workflow is None:
+            return
+        name = self._ask_name("重命名工作流", workflow.name)
+        if name:
+            self._save_workflow(replace(workflow, name=name[:100]))
+
+    def delete_workflow(self) -> None:
+        workflow = self.store.workflows.get(self._workflow_id())
+        if workflow is None:
+            return
+        answer = QMessageBox.question(self, "删除工作流", f"删除工作流“{workflow.name}”？其中的命令不会被删除。", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.store.delete_workflow(workflow.id)
+        except (ValueError, StorageError) as exc:
+            self._error(str(exc))
+            return
+        self._refresh_workflows()
+
+    def add_workflow_step(self) -> None:
+        workflow = self.store.workflows.get(self._workflow_id())
+        command_id = self.step_command.currentData()
+        if workflow is not None and command_id in self.store.commands:
+            self._save_workflow(replace(workflow, steps=[*workflow.steps, command_id]), len(workflow.steps))
+
+    def remove_workflow_step(self) -> None:
+        workflow = self.store.workflows.get(self._workflow_id())
+        row = self.step_list.currentRow()
+        if workflow is not None and 0 <= row < len(workflow.steps):
+            steps = list(workflow.steps)
+            del steps[row]
+            self._save_workflow(replace(workflow, steps=steps), min(row, len(steps) - 1))
+
+    def move_workflow_step(self, offset: int) -> None:
+        workflow = self.store.workflows.get(self._workflow_id())
+        row = self.step_list.currentRow()
+        target = row + offset
+        if workflow is not None and 0 <= row < len(workflow.steps) and 0 <= target < len(workflow.steps):
+            steps = list(workflow.steps)
+            steps[row], steps[target] = steps[target], steps[row]
+            self._save_workflow(replace(workflow, steps=steps), target)
+
+    def run_workflow(self, workflow_id: str | None = None) -> None:
+        workflow = self.store.workflows.get(workflow_id or self._workflow_id())
+        if workflow is None or not workflow.steps:
+            return
+        if self._workflow_run is not None:
+            self._error("已有工作流在运行，请等待完成或先停止。")
+            return
+        if self.runtime_error:
+            self._error(self.runtime_error)
+            return
+        if self.execution_dialog and self.execution_dialog.isVisible():
+            self.execution_dialog.raise_()
+            return
+        steps = [self.store.commands[step] for step in workflow.steps if step in self.store.commands]
+        dialog = ExecutionDialog(self, steps, workflow_name=workflow.name)
+        dialog.submitted.connect(lambda plan, name=workflow.name: self._execute_workflow(name, plan))
+        self._open_dialog(dialog)
+
+    def _execute_workflow(self, name: str, plan: list[PreparedCommand]) -> None:
+        self._workflow_run = {"name": name, "plan": list(plan), "index": -1, "task_id": ""}
+        self._start_next_workflow_step()
+
+    def _start_next_workflow_step(self) -> None:
+        run = self._workflow_run
+        if run is None:
+            return
+        plan: list[PreparedCommand] = run["plan"]
+        run["index"] = index = run["index"] + 1
+        if index >= len(plan):
+            self._finish_workflow(f"工作流「{run['name']}」已完成，共 {len(plan)} 步。")
+            return
+        step = plan[index]
+        try:
+            task = self.runner.start_adb(step.title, list(step.args), serial=step.serial, command_id=step.command_id,
+                                         timeout=step.timeout, source="command")
+        except (ValueError, OSError, RuntimeError) as exc:
+            self._finish_workflow(f"工作流「{run['name']}」第 {index + 1} 步无法启动：{exc}")
+            return
+        run["task_id"] = task.id
+        self.workflow_status.setText(f"工作流「{run['name']}」运行中：第 {index + 1}/{len(plan)} 步 · {step.title}")
+        self._update_workflow_buttons()
+        if index == 0:
+            self.show_output.emit(task.id)
+        if task.status in TERMINAL_STATUSES:
+            self._workflow_task_finished(task)
+
+    def _workflow_task_finished(self, task: Task) -> None:
+        run = self._workflow_run
+        if run is None or task.id != run["task_id"]:
+            return
+        if task.status == "succeeded" and task.exit_code == 0:
+            self._start_next_workflow_step()
+            return
+        status = STATUS_LABELS.get(task.status, task.status)
+        self._finish_workflow(f"工作流「{run['name']}」在第 {run['index'] + 1} 步停止：{task.title} · {status}"
+                              + (f" · 退出码 {task.exit_code}" if task.exit_code is not None else "") + "；后续步骤未执行。")
+
+    def stop_workflow(self) -> None:
+        run = self._workflow_run
+        if run is None:
+            return
+        task_id = run["task_id"]
+        self._finish_workflow(f"工作流「{run['name']}」已手动停止；后续步骤未执行。")
+        if task_id:
+            self.runner.cancel(task_id)
+
+    def _finish_workflow(self, message: str) -> None:
+        self._workflow_run = None
+        self.workflow_status.setText(message)
+        self._update_workflow_buttons()
+
     @property
     def table_tools(self) -> TableTools | None:
         """The table that answers F5 / Ctrl+F for the visible tab."""
@@ -516,6 +762,7 @@ class CommandLibraryPage(QWidget):
     def set_runtime_error(self, message: str) -> None:
         self.runtime_error = message
         self._selection_changed()
+        self._update_workflow_buttons()
         if self.execution_dialog:
             self.execution_dialog.update_preview()
 
@@ -728,6 +975,7 @@ class CommandLibraryPage(QWidget):
         self._update_counts()
         self._selection_changed()
         self._management_selection_changed()
+        self._refresh_workflows()
 
     def _selection_changed(self) -> None:
         command = self.store.commands.get(self._selected_id())
@@ -763,6 +1011,8 @@ class CommandLibraryPage(QWidget):
             widget.setEnabled(not self.store.error)
         for command in self.store.commands.values():
             self._sync_command_row(command)
+        if hasattr(self, "workflow_list"):
+            self._refresh_workflows()
 
     def _refresh_library(self, *unused, selected_id: str | None = None) -> None:
         selected_id = selected_id or self._selected_id()
@@ -850,7 +1100,7 @@ class CommandLibraryPage(QWidget):
         if not command:
             return
         references = sum(workflow.steps.count(command.id) for workflow in self.store.workflows.values())
-        answer = QMessageBox.question(self, "删除命令", f"删除“{command.name}”？引用它的 {references} 个旧版已保存工作流步骤也会移除。\n已经提交的任务不受影响。", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        answer = QMessageBox.question(self, "删除命令", f"删除“{command.name}”？引用它的 {references} 个工作流步骤也会移除。\n已经提交的任务不受影响。", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
         if answer != QMessageBox.StandardButton.Yes:
             return
         try:

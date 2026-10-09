@@ -4,6 +4,7 @@ import pytest
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from sysdroid.core import commands as android_commands
+from sysdroid.core.commands import prepare_command
 from sysdroid.ui.pages.command_page import CommandLibraryPage
 
 
@@ -97,3 +98,69 @@ def test_run_directly_only_for_simple_commands(page, runner, monkeypatch):
     assert page.run_directly("devices") is not None and started[-1] == (["devices", "-l"], "")
     texts = [action.text() for action in page.library_tools.build_menu(page._library_rows["devices"], 1).actions() if action.text()]
     assert "直接执行" in texts
+
+
+def test_workflow_tab_edits_steps_and_runs_them_in_order(page, runner, monkeypatch):
+    from sysdroid.core.backend import Task
+    started: list[Task] = []
+
+    def start_adb(title, args, serial="", command_id="", timeout=10, **kwargs):
+        task = Task(id=f"w{len(started)}", title=title, program="adb", args=args, serial=serial, command_id=command_id)
+        task.status = "running"
+        started.append(task)
+        return task
+
+    monkeypatch.setattr(runner, "start_adb", start_adb)
+    monkeypatch.setattr(page, "_ask_name", lambda title, text="": "巡检")
+    page.set_device("SER", "device")
+    page.new_workflow()
+    workflow_id = page._workflow_id()
+    assert page.store.workflows[workflow_id].name == "巡检" and not page.run_workflow_button.isEnabled()
+    for command_id in ("devices", "props", "packages"):
+        page.step_command.setCurrentIndex(page.step_command.findData(command_id))
+        page.add_workflow_step()
+    page.move_workflow_step(-1)
+    assert page.store.workflows[workflow_id].steps == ["devices", "packages", "props"]
+    page.step_list.setCurrentRow(0)
+    page.remove_workflow_step()
+    assert page.store.workflows[workflow_id].steps == ["packages", "props"]
+    assert page.workflow_list.currentItem().text() == "巡检（2 步）"
+
+    page.run_workflow()
+    dialog = page.execution_dialog
+    assert dialog.workflow_name == "巡检" and dialog.selector.isHidden()
+    assert not dialog.run_button.isEnabled()
+    dialog.fields[1, "key"].setText("ro.product.model")
+    dialog._submit()
+    assert [task.args for task in started] == [["shell", "pm list packages -3"]]
+    assert "第 1/2 步" in page.workflow_status.text() and page.stop_workflow_button.isEnabled()
+    started[0].status, started[0].exit_code = "succeeded", 0
+    runner.task_finished.emit(started[0])
+    assert started[1].args == ["shell", "getprop ro.product.model"]
+    started[1].status, started[1].exit_code = "failed", 1
+    runner.task_finished.emit(started[1])
+    assert "第 2 步停止" in page.workflow_status.text() and not page.stop_workflow_button.isEnabled()
+
+
+def test_stopping_a_workflow_cancels_the_step_and_skips_the_rest(page, runner, monkeypatch):
+    from sysdroid.core.backend import Task
+    from sysdroid.core.commands import Workflow
+    started, cancelled = [], []
+
+    def start_adb(title, args, **kwargs):
+        task = Task(id=f"s{len(started)}", title=title, program="adb", args=args)
+        task.status = "running"
+        started.append(task)
+        return task
+
+    monkeypatch.setattr(runner, "start_adb", start_adb)
+    monkeypatch.setattr(runner, "cancel", lambda task_id, force=False: cancelled.append(task_id))
+    page.store.save_workflow(Workflow("wf", "两步", ["devices", "devices"]))
+    page._refresh_workflows("wf")
+    step = prepare_command(page.store.commands["devices"], {})
+    page._execute_workflow("两步", [step, step])
+    page.stop_workflow()
+    assert cancelled == ["s0"] and "手动停止" in page.workflow_status.text()
+    started[0].status = "cancelled"
+    runner.task_finished.emit(started[0])
+    assert len(started) == 1
