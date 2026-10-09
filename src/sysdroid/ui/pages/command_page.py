@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import replace
+from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QTabWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
@@ -15,7 +17,7 @@ from PySide6.QtWidgets import (
 from sysdroid.core.backend import STATUS_LABELS, TERMINAL_STATUSES, Task, TaskRunner, powershell_command
 from sysdroid.core.commands import (
     CATEGORIES, EXECUTION_TYPES, Command, CommandStore, PreparedCommand, StorageError,
-    is_remote_shell, prepare_command, variable_names,
+    is_remote_shell, parse_payload, prepare_command, variable_names,
 )
 from sysdroid.ui import kit as ui_kit
 from sysdroid.ui.tables import TableTools
@@ -426,6 +428,10 @@ class CommandLibraryPage(QWidget):
         self.duplicate_button = _button("复制命令", lambda: self._duplicate(self._managed_id()), actions)
         self.delete_button = _button("删除命令", lambda: self._delete(self._managed_id()), actions)
         actions.addStretch()
+        self.import_button = _button("导入 JSON…", self.import_commands, actions)
+        self.export_button = _button("导出 JSON…", self.export_commands, actions)
+        self.import_button.setToolTip("合并其他 SysDroid 导出的命令和工作流；同 ID 内容不同时询问是否覆盖")
+        self.export_button.setToolTip("导出全部命令和工作流，可在其他电脑导入")
         layout.addLayout(actions)
         self.tabs.addTab(page, "命令管理")
 
@@ -727,7 +733,7 @@ class CommandLibraryPage(QWidget):
         self._refresh_library(selected_id=selected_id)
         self._refresh_management(selected_id=managed_id)
         self._refresh_history()
-        for widget in (self.save_command_button, self.new_command_button, self.editor_new_button, self.management_new_button, self.name_field, self.category_field, self.execution_type_field, self.template_field, self.description_field, self.tags_field, self.scope_field, self.timeout_field, self.permission_field, self.favorite_field, self.show_in_library_field):
+        for widget in (self.save_command_button, self.new_command_button, self.editor_new_button, self.management_new_button, self.import_button, self.export_button, self.name_field, self.category_field, self.execution_type_field, self.template_field, self.description_field, self.tags_field, self.scope_field, self.timeout_field, self.permission_field, self.favorite_field, self.show_in_library_field):
             widget.setEnabled(not self.store.error)
         for command in self.store.commands.values():
             self._sync_command_row(command)
@@ -975,6 +981,59 @@ class CommandLibraryPage(QWidget):
         except (ValueError, OSError) as exc:
             QMessageBox.warning(self, "清空执行历史失败", f"无法清空执行历史：{exc}")
             return
+
+    def export_commands(self) -> bool:
+        if self.store.error:
+            self._error(self.store.error)
+            return False
+        filename, _ = QFileDialog.getSaveFileName(self, "导出命令库", "sysdroid-commands.json", "JSON 文件 (*.json)")
+        if not filename:
+            return False
+        if not filename.lower().endswith(".json"):
+            filename += ".json"
+        try:
+            payload = self.store.export_payload()
+            Path(filename).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except (OSError, StorageError) as exc:
+            self._error(f"导出失败：{exc}")
+            return False
+        QMessageBox.information(self, "导出命令库", f"已导出 {len(payload['commands'])} 条命令、{len(payload['workflows'])} 个工作流：\n{filename}")
+        return True
+
+    def import_commands(self) -> bool:
+        if self.store.error:
+            self._error(self.store.error)
+            return False
+        filename, _ = QFileDialog.getOpenFileName(self, "导入命令库", "", "JSON 文件 (*.json)")
+        if not filename:
+            return False
+        try:
+            payload = json.loads(Path(filename).read_text(encoding="utf-8"))
+            commands, workflows, _version = parse_payload(payload)
+        except (OSError, ValueError, TypeError) as exc:
+            self._error(f"无法读取导入文件：{exc}")
+            return False
+        conflicts = [command for command in commands if command.id in self.store.commands and self.store.commands[command.id] != command]
+        overwrite = False
+        if conflicts:
+            names = "\n".join(f"· {command.name}" for command in conflicts[:10]) + ("\n…" if len(conflicts) > 10 else "")
+            answer = QMessageBox.question(
+                self, "导入命令库",
+                f"{len(conflicts)} 条命令与现有命令 ID 相同但内容不同：\n{names}\n\n是：用导入内容覆盖；否：保留现有命令，仅导入新命令。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.No,
+            )
+            if answer == QMessageBox.StandardButton.Cancel:
+                return False
+            overwrite = answer == QMessageBox.StandardButton.Yes
+        try:
+            stats = self.store.import_payload(payload, overwrite=overwrite)
+        except (ValueError, TypeError, StorageError) as exc:
+            self._error(f"导入失败，命令库未修改：{exc}")
+            return False
+        self._refresh_all()
+        QMessageBox.information(self, "导入命令库", f"新增 {stats['added']} 条，覆盖 {stats['updated']} 条，跳过 {stats['skipped']} 条；工作流更新 {stats['workflows']} 个（文件含 {len(commands)} 条命令、{len(workflows)} 个工作流）。")
+        return True
 
     def _recover(self) -> None:
         answer = QMessageBox.warning(self, "恢复命令库", "将原命令库改名为唯一备份，恢复默认命令库。不会删除或覆盖原文件内容。继续？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)

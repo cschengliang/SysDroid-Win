@@ -424,3 +424,38 @@ def test_invalid_visibility_cannot_be_saved_over_valid_library(tmp_path, visibil
         store.save_command(invalid)
     assert path.read_bytes() == original
     assert store.commands[command.id] == command
+
+
+def test_export_import_round_trip_merges_without_touching_existing(tmp_path):
+    from sysdroid.core.commands import Command, CommandStore, Workflow
+    source = CommandStore(tmp_path / "a.json")
+    custom = Command("custom", "我的命令", "系统", "adb shell getprop {key}", execution_type="quick")
+    source.save_command(custom)
+    source.save_workflow(Workflow("wf", "检查", ["devices", "custom"]))
+    payload = source.export_payload()
+    assert payload["format"] == "sysdroid-commands" and payload["version"] == 3
+    target = CommandStore(tmp_path / "b.json")
+    target.save_command(replace(target.commands["devices"], name="本地改名"))
+    stats = target.import_payload(json.loads(json.dumps(payload)))
+    assert stats == {"added": 1, "updated": 0, "skipped": 1, "workflows": 1}
+    assert target.commands["devices"].name == "本地改名" and target.commands["custom"] == custom
+    assert target.workflows["wf"].steps == ["devices", "custom"]
+    stats = target.import_payload(payload, overwrite=True)
+    assert stats["updated"] == 1 and target.commands["devices"].name == "查看设备列表"
+    assert json.loads((tmp_path / "b.json").read_text(encoding="utf-8"))["commands"]
+
+
+def test_import_rejects_invalid_payload_without_saving(tmp_path):
+    from sysdroid.core.commands import CommandStore
+    store = CommandStore(tmp_path / "c.json")
+    before = dict(store.commands)
+    bad = {"version": 3, "commands": [{"id": "x", "name": "坏", "category": "系统", "template": "rm -rf /",
+                                       "execution_type": "quick", "show_in_library": True}], "workflows": []}
+    with pytest.raises(ValueError):
+        store.import_payload(bad)
+    with pytest.raises(ValueError, match="导出文件"):
+        store.import_payload({"format": "other", "version": 3, "commands": [], "workflows": []})
+    dangling = {"version": 3, "commands": [], "workflows": [{"id": "w", "name": "w", "steps": ["missing"]}]}
+    with pytest.raises(ValueError, match="工作流"):
+        store.import_payload(dangling)
+    assert store.commands == before and not (tmp_path / "c.json").exists()

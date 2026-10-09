@@ -249,6 +249,35 @@ def seed_commands() -> list[Command]:
     ]
 
 
+EXPORT_FORMAT = "sysdroid-commands"
+
+
+def parse_payload(payload: object) -> tuple[list[Command], list[Workflow], int]:
+    """Parse a stored or exported command library, migrating older versions."""
+    if not isinstance(payload, dict) or type(payload.get("version")) is not int or payload["version"] not in {1, 2, 3}:
+        raise ValueError("命令库格式或版本无效")
+    if not isinstance(payload.get("commands"), list) or not isinstance(payload.get("workflows"), list):
+        raise ValueError("commands / workflows 必须是列表")
+    records = []
+    for record in payload["commands"]:
+        if not isinstance(record, dict):
+            raise ValueError("命令记录必须是对象")
+        if "execution_type" not in record:
+            if payload["version"] != 1:
+                raise ValueError("命令记录缺少 execution_type")
+            record = {**record, "execution_type": infer_execution_type(record.get("template", ""))}
+        if "show_in_library" not in record:
+            if payload["version"] == 3:
+                raise ValueError("命令记录缺少 show_in_library")
+            record = {**record, "show_in_library": True}
+        records.append(record)
+    if any(not isinstance(record, dict) for record in payload["workflows"]):
+        raise ValueError("工作流记录必须是对象")
+    commands = [Command(**record) for record in records]
+    workflows = [Workflow(**record) for record in payload["workflows"]]
+    return commands, workflows, payload["version"]
+
+
 class CommandStore:
     """Atomic command/workflow transactions; corrupt storage remains read-only.
 
@@ -263,29 +292,11 @@ class CommandStore:
         try:
             if self.path.exists():
                 payload = json.loads(self.path.read_text(encoding="utf-8"))
-                if not isinstance(payload, dict) or type(payload.get("version")) is not int or payload["version"] not in {1, 2, 3}:
-                    raise ValueError("命令库格式或版本无效")
-                if not isinstance(payload.get("commands"), list) or not isinstance(payload.get("workflows"), list):
-                    raise ValueError("commands / workflows 必须是列表")
-                records = []
-                for record in payload["commands"]:
-                    if not isinstance(record, dict):
-                        raise ValueError("命令记录必须是对象")
-                    if "execution_type" not in record:
-                        if payload["version"] != 1:
-                            raise ValueError("命令记录缺少 execution_type")
-                        record = {**record, "execution_type": infer_execution_type(record.get("template", ""))}
-                    if "show_in_library" not in record:
-                        if payload["version"] == 3:
-                            raise ValueError("命令记录缺少 show_in_library")
-                        record = {**record, "show_in_library": True}
-                    records.append(record)
-                commands = [Command(**record) for record in records]
-                workflows = [Workflow(**record) for record in payload["workflows"]]
+                commands, workflows, version = parse_payload(payload)
                 self._validate(commands, workflows)
                 command_map = {command.id: command for command in commands}
                 workflow_map = {workflow.id: workflow for workflow in workflows}
-                if payload["version"] != 3:
+                if version != 3:
                     templates = {command.template for command in commands}
                     for command in seed_commands():
                         if not command.show_in_library and command.id not in command_map and command.template not in templates:
@@ -351,6 +362,51 @@ class CommandStore:
 
     def delete_workflow(self, workflow_id: str) -> None:
         self._commit(dict(self.commands), {key: value for key, value in self.workflows.items() if key != workflow_id})
+
+    def export_payload(self, command_ids: list[str] | None = None) -> dict[str, object]:
+        """Portable JSON for all (or selected) commands plus workflows fully covered by them."""
+        if self.error:
+            raise StorageError(self.error)
+        selected = [self.commands[key] for key in (command_ids if command_ids is not None else self.commands) if key in self.commands]
+        ids = {command.id for command in selected}
+        workflows = [workflow for workflow in self.workflows.values() if set(workflow.steps) <= ids]
+        return {"format": EXPORT_FORMAT, "version": 3, "exported_at": datetime.now().isoformat(timespec="seconds"),
+                "commands": [asdict(command) for command in selected],
+                "workflows": [asdict(workflow) for workflow in workflows]}
+
+    def import_payload(self, payload: object, *, overwrite: bool = False) -> dict[str, int]:
+        """Merge an exported library in one atomic save.
+
+        Existing IDs are kept unless ``overwrite``; identical records count as
+        unchanged. Nothing is written if any record is invalid.
+        """
+        if isinstance(payload, dict) and payload.get("format") not in (None, EXPORT_FORMAT):
+            raise ValueError("不是 SysDroid 命令库导出文件")
+        commands, workflows, _version = parse_payload(payload)
+        self._validate(commands, [])
+        stats = {"added": 0, "updated": 0, "skipped": 0, "workflows": 0}
+        command_map = dict(self.commands)
+        for command in commands:
+            existing = command_map.get(command.id)
+            if existing is None:
+                stats["added"] += 1
+            elif existing == command:
+                continue
+            elif not overwrite:
+                stats["skipped"] += 1
+                continue
+            else:
+                stats["updated"] += 1
+            command_map[command.id] = command
+        workflow_map = dict(self.workflows)
+        for workflow in workflows:
+            if workflow.id in workflow_map and not overwrite:
+                continue
+            if workflow_map.get(workflow.id) != workflow:
+                workflow_map[workflow.id] = workflow
+                stats["workflows"] += 1
+        self._commit(command_map, workflow_map)
+        return stats
 
     def recover_defaults(self) -> Path | None:
         backup = None
