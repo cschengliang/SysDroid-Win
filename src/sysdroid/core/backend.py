@@ -33,6 +33,8 @@ TRUNCATED = "[较早输出已截断；保留最近 2 MiB 字符]\n"
 # sessions; page-internal queries (props, settings, apks, users...) are not.
 HISTORY_SOURCES = frozenset({"command"})
 HISTORY_LIMIT = 200
+# Finished, non-transient tasks kept in the session task list (oldest pruned first).
+FINISHED_TASK_LIMIT = 100
 HISTORY_OUTPUT_LIMIT = 64 * 1024
 HISTORY_TRUNCATED = "[历史记录仅保留每个输出流最近 64 KiB 字符]\n"
 HISTORY_SAVE_DELAY_MS = 500
@@ -275,6 +277,7 @@ class TaskRunner(QObject):
         self._adb_running: dict[str, _AdbRunning] = {}
         self._active_ids: dict[str, None] = {}
         self._transient_finished: deque[str] = deque()
+        self._finished: deque[str] = deque()
         self._pinned_id = ""
         self._pending_output: dict[tuple[str, str], deque[str]] = {}
         self._pending_sizes: dict[tuple[str, str], int] = {}
@@ -853,7 +856,9 @@ class TaskRunner(QObject):
         recorded = not task.transient and task.source in HISTORY_SOURCES
         if task.transient:
             self._transient_finished.append(task.id)
-        elif recorded:
+        else:
+            self._finished.append(task.id)
+        if recorded:
             self.history.append(task)
             self.history = self.history[-HISTORY_LIMIT:]
             self._save_history()
@@ -861,8 +866,7 @@ class TaskRunner(QObject):
         if recorded:
             self.history_changed.emit()
         self.task_finished.emit(task)
-        if task.transient:
-            QTimer.singleShot(0, self._prune_transient)
+        QTimer.singleShot(0, self._prune_transient if task.transient else self._prune_finished)
 
     def pin_task(self, task_id: str) -> None:
         if self.get_task(task_id) is not None:
@@ -873,6 +877,23 @@ class TaskRunner(QObject):
         if self._pinned_id == task_id:
             self._pinned_id = ""
             self._prune_transient()
+            self._prune_finished()
+
+    def _prune_finished(self) -> None:
+        """Drop the oldest finished session tasks beyond FINISHED_TASK_LIMIT (never the pinned one)."""
+        self._finished = deque(task_id for task_id in self._finished if task_id in self.tasks)
+        excess = len(self._finished) - FINISHED_TASK_LIMIT
+        if excess <= 0:
+            return
+        retained = deque()
+        for task_id in self._finished:
+            if excess > 0 and task_id != self._pinned_id:
+                excess -= 1
+                if self.tasks.pop(task_id, None) is not None:
+                    self.task_removed.emit(task_id)
+            else:
+                retained.append(task_id)
+        self._finished = retained
 
     def _prune_transient(self) -> None:
         recent = set(tuple(self._transient_finished)[-20:])
@@ -1039,6 +1060,7 @@ class TaskRunner(QObject):
                 del self.tasks[task_id]
                 self.task_removed.emit(task_id)
         self._transient_finished = deque(task_id for task_id in self._transient_finished if task_id in self.tasks)
+        self._finished = deque(task_id for task_id in self._finished if task_id in self.tasks)
 
     def get_task(self, task_id: str) -> Task | None:
         return self.tasks.get(task_id) or next((task for task in reversed(self.history) if task.id == task_id), None)

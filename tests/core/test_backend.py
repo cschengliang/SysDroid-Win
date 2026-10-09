@@ -326,3 +326,26 @@ def test_buffer_truncation_retains_both_unicode_tails_before_finished(runner, mo
     runner.cancel(task.id)
     assert finished == [(task.stdout, task.stderr)]
     assert all(text.endswith("尾部🙂") and len(text) <= 128 and "截断" in text for text in finished[0])
+
+
+def test_finished_session_tasks_are_capped_oldest_first_except_pinned(runner, qtbot, monkeypatch):
+    from sysdroid.core import backend as android_backend
+    monkeypatch.setattr(android_backend, "FINISHED_TASK_LIMIT", 5)
+    removed = []
+    runner.task_removed.connect(removed.append)
+    tasks = []
+    for index in range(8):
+        task = runner.start_adb(f"user {index}", ["devices"])
+        tasks.append(task)
+        if index == 0:
+            runner.pin_task(task.id)
+        runner.cancel(task.id)
+    qtbot.waitUntil(lambda: len(removed) == 3, timeout=2000)
+    assert removed == [task.id for task in tasks[1:4]]
+    assert set(runner.tasks) == {tasks[0].id, *(task.id for task in tasks[4:])}
+    runner.unpin_task(tasks[0].id)
+    assert runner.get_task(tasks[0].id) is not None  # still within the limit
+    for index in range(2):
+        runner.cancel(runner.start_adb(f"more {index}", ["devices"]).id)
+    qtbot.waitUntil(lambda: tasks[0].id in removed, timeout=2000)
+    assert len([task for task in runner.tasks.values() if not task.transient]) == 5
