@@ -836,3 +836,40 @@ def test_force_stop_and_app_package_detection(process_runner, controller):
     assert app_package(info(1000, "system_server", "system_server")) is None
     assert app_package(info(None, "com.a.b", "com.a.b")) is None
     assert app_package(info(10001, "app_process", "/system/bin/app_process")) is None
+
+
+def test_page_kill_requires_confirmation_and_interval_combo_drives_controller(process_runner, qtbot, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    page = ProcessPage(process_runner)
+    qtbot.addWidget(page)
+    page.set_device("device-a")
+    page.set_active(True)
+    finish_sample(process_runner)
+    page.table.setCurrentCell(0, 0)
+    answers = [QMessageBox.StandardButton.No]
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: answers[0])
+    page.kill_selected()
+    assert len(process_runner.requests) == 1
+    answers[0] = QMessageBox.StandardButton.Yes
+    page.kill_selected(force=True)
+    assert "kill -s KILL" in script_of(process_runner.requests[-1])
+    page.set_interval(5000)
+    assert page.controller.interval == 5000 and page.interval() == 5000
+    page.set_active(False)
+
+
+def test_page_details_double_click_while_busy_is_queued(process_runner, qtbot):
+    page = ProcessPage(process_runner)
+    qtbot.addWidget(page)
+    page.set_device("device-a")
+    page.set_active(True)
+    finish_sample(process_runner)
+    page.controller.set_auto_refresh(False)
+    sampling = page.controller.refresh()
+    page.table.setCurrentCell(0, 0)
+    page._load_details()
+    assert page.controller.details_pending and "已排队" in page.status_label.text()
+    finish_sample(process_runner, sampling)
+    qtbot.waitUntil(lambda: len(process_runner.requests) == 3)
+    assert "详情" in process_runner.requests[-1].title
+    page.set_active(False)

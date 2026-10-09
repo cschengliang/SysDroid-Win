@@ -117,6 +117,10 @@ class AndroidToolboxWindow(QMainWindow):
             process_columns = [process_columns]
         if isinstance(process_columns, list):
             self.process_page.set_visible_columns(process_columns)
+        try:
+            self.process_page.set_interval(int(self._settings.value("processes/interval", 2000)))
+        except (TypeError, ValueError):
+            pass
         geometry = self._settings.value("geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
@@ -1005,6 +1009,7 @@ class AndroidToolboxWindow(QMainWindow):
         self._settings.setValue("splitter", self.workspace_splitter.saveState())
         self._settings.setValue("dock_ratio", self._dock_ratio)
         self._settings.setValue("processes/columns", self.process_page.visible_columns())
+        self._settings.setValue("processes/interval", self.process_page.interval())
         self._settings.sync()
         if self._settings.status() != QSettings.Status.NoError:
             self._write_log("[ERROR] 无法保存工作区布局。")
