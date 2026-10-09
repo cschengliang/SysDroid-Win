@@ -37,3 +37,18 @@ def test_default_ignores_path_and_explicit_choice_configures_both(monkeypatch, t
     with pytest.raises(ValueError):
         adb_executable()
 
+
+def test_source_mode_resolves_the_repository_root_that_holds_tool_and_lib(monkeypatch):
+    from sysdroid import runtime_paths
+    root = Path(__file__).resolve().parents[2]
+    monkeypatch.delattr(runtime_paths.sys, "frozen", raising=False)
+    assert runtime_paths.application_dir() == root
+    assert (root / "src" / "sysdroid" / "runtime_paths.py").is_file()
+    assert (root / "android_toolbox.py").is_file()
+
+
+def test_frozen_mode_uses_the_executable_folder(monkeypatch, tmp_path):
+    from sysdroid import runtime_paths
+    monkeypatch.setattr(runtime_paths.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(runtime_paths.sys, "executable", str(tmp_path / "AndroidToolbox.exe"))
+    assert runtime_paths.application_dir() == tmp_path.resolve()

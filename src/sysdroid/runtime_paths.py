@@ -10,8 +10,13 @@ _DLL_HANDLES: list[object] = []
 _DLL_CONFIGURED = False
 
 
+# src/sysdroid/runtime_paths.py -> repository root (which holds lib/ and tool/).
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
 def application_dir() -> Path:
-    return Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+    """Folder that contains tool/: the exe's folder when frozen, else the repository root."""
+    return Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else PROJECT_ROOT
 
 
 def _override(name: str, value: str) -> Path:
