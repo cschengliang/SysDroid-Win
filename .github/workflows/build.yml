@@ -116,29 +116,6 @@ jobs:
 
       # The build script itself re-downloads/verifies tools and license sources.
       # NETRC lets requests authenticate to api.github.com only (avoids the 60/h anonymous limit).
-      # Diagnostics for Windows-system DLL resolution on the runner
-      - name: Diagnose system DLLs
-        continue-on-error: true
-        run: |
-          $sys = $env:SystemRoot
-          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber | Format-List
-          foreach ($n in 'icu.dll','icuuc.dll','propsys.dll') {
-            $f = Join-Path "$sys\System32" $n
-            "== $n exists=$(Test-Path $f)"
-            if (Test-Path $f) {
-              (Get-Item $f).VersionInfo | Select-Object ProductName, FileVersion | Format-List
-              $sig = Get-AuthenticodeSignature -LiteralPath $f
-              "sig status=$($sig.Status) type=$($sig.SignatureType) subject=$($sig.SignerCertificate.Subject)"
-            }
-          }
-          # Same check the build does, via Windows PowerShell 5.1, with inherited vs. cleared PSModulePath
-          $ps51 = "$sys\System32\WindowsPowerShell\v1.0\powershell.exe"
-          $cmd = "`$s=Get-AuthenticodeSignature -LiteralPath '$sys\System32\icu.dll'; `$s.Status; `$s.SignerCertificate.Subject"
-          "-- ps5.1 inherited PSModulePath:"; & $ps51 -NoProfile -NonInteractive -Command $cmd 2>&1
-          $saved = $env:PSModulePath; Remove-Item Env:PSModulePath
-          "-- ps5.1 cleared PSModulePath:"; & $ps51 -NoProfile -NonInteractive -Command $cmd 2>&1
-          $env:PSModulePath = $saved
-
       - name: Build portable package
         run: |
           $netrc = Join-Path $env:RUNNER_TEMP 'netrc'
