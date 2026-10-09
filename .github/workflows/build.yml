@@ -131,8 +131,13 @@ jobs:
               "sig status=$($sig.Status) type=$($sig.SignatureType) subject=$($sig.SignerCertificate.Subject)"
             }
           }
-          $env:PATH = @((Join-Path $PWD $env:PY_DIR), "$sys\System32", "$sys", "$sys\System32\Wbem", "$sys\System32\WindowsPowerShell\v1.0") -join ';'
-          & "$env:PY_DIR\python.exe" -s -c "import portable_assets as p; [print(n, '->', p._system_dll(n, 0x8664, {})) for n in ('icu.dll','icuuc.dll','propsys.dll')]"
+          # Same check the build does, via Windows PowerShell 5.1, with inherited vs. cleared PSModulePath
+          $ps51 = "$sys\System32\WindowsPowerShell\v1.0\powershell.exe"
+          $cmd = "`$s=Get-AuthenticodeSignature -LiteralPath '$sys\System32\icu.dll'; `$s.Status; `$s.SignerCertificate.Subject"
+          "-- ps5.1 inherited PSModulePath:"; & $ps51 -NoProfile -NonInteractive -Command $cmd 2>&1
+          $saved = $env:PSModulePath; Remove-Item Env:PSModulePath
+          "-- ps5.1 cleared PSModulePath:"; & $ps51 -NoProfile -NonInteractive -Command $cmd 2>&1
+          $env:PSModulePath = $saved
 
       - name: Build portable package
         run: |
@@ -143,6 +148,9 @@ jobs:
           # which PyInstaller would otherwise pick up. Keep only Windows system dirs.
           $sys = $env:SystemRoot
           $env:PATH = @((Join-Path $PWD $env:PY_DIR), "$sys\System32", "$sys", "$sys\System32\Wbem", "$sys\System32\WindowsPowerShell\v1.0") -join ';'
+          # pwsh 7's PSModulePath breaks Get-AuthenticodeSignature in the Windows PowerShell 5.1
+          # child the build uses to verify OS-signed DLLs (icu.dll, propsys.dll). Let 5.1 use its defaults.
+          Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue
           try {
             & "$env:PY_DIR\python.exe" -s build_android_toolbox.py
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
