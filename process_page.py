@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from android_backend import OUTPUT_LIMIT, TaskRunner
 from android_processes import ProcessController, ProcessInfo
+import ui_kit
 
 
 _ID_ROLE = int(Qt.ItemDataRole.UserRole) + 1
@@ -113,9 +114,7 @@ class ProcessPage(QWidget):
         self._update_controls()
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        layout = ui_kit.page_layout(QVBoxLayout(self))
         first = QHBoxLayout()
         self.device_label = _note("请在顶部选择在线设备")
         self.device_label.setObjectName("processDevice")
@@ -156,14 +155,17 @@ class ProcessPage(QWidget):
         layout.addLayout(actions)
         self.summary_label = _note("尚未采样 · CPU % 使用整机容量，不乘核心数")
         self.summary_label.setObjectName("processSummary")
+        ui_kit.set_role(self.summary_label, "hint")
         layout.addWidget(self.summary_label)
         self.status_label = _note()
         self.status_label.setObjectName("processStatus")
+        ui_kit.set_role(self.status_label, "hint")
         layout.addWidget(self.status_label)
         self.error_label = _note()
-        self.error_label.setStyleSheet("color: #b42318;")
+        ui_kit.set_role(self.error_label, "error")
         self.error_scroll = QScrollArea()
         self.error_scroll.setObjectName("processErrors")
+        ui_kit.set_role(self.error_scroll, "banner")
         self.error_scroll.setWidgetResizable(True)
         self.error_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self.error_scroll.setMinimumHeight(50)
@@ -199,6 +201,9 @@ class ProcessPage(QWidget):
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.table.itemDoubleClicked.connect(lambda _item: self._load_details())
         self.splitter.addWidget(self.table)
+        ui_kit.install_empty_state(self.table, lambda: ui_kit.device_empty_text(
+            self.controller.serial, self.controller.device_state, self.table, self.status_label.text(), "等待首次采样"),
+            self.controller.changed)
         detail_scroll = QScrollArea()
         detail_scroll.setWidgetResizable(True)
         detail_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
@@ -225,7 +230,7 @@ class ProcessPage(QWidget):
         self.details_output_button = QPushButton("详情完整任务输出")
         self.details_output_button.clicked.connect(self._open_details_output)
         detail_layout.addWidget(self.details_output_button)
-        detail_layout.addWidget(_note("RSS 与 PSS / SwapPss 分别展示。AM 启动字段只取同 PID + 数值 UID 的真实记录；未提供时不推断启动来源。不提权、不结束进程。"))
+        detail_layout.addWidget(ui_kit.info_note("只读：不提权、不结束进程；RSS 与 PSS 分开展示。", "RSS 与 PSS / SwapPss 分别展示。AM 启动字段只取同 PID + 数值 UID 的真实记录；未提供时不推断启动来源。不提权、不结束进程。"))
         detail_scroll.setWidget(group)
         self.splitter.addWidget(detail_scroll)
         self.splitter.setStretchFactor(0, 3)

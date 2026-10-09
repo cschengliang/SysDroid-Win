@@ -17,6 +17,7 @@ from android_commands import (
     CATEGORIES, EXECUTION_TYPES, Command, CommandStore, PreparedCommand, StorageError,
     is_remote_shell, prepare_command, variable_names,
 )
+import ui_kit
 
 
 def command_preview(prepared: PreparedCommand, program: str = "adb") -> str:
@@ -211,9 +212,8 @@ class CommandLibraryPage(QWidget):
         for task in [*runner.history, *runner.tasks.values()]:
             if task.command_id and not task.transient:
                 self._latest[task.command_id] = task
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        self.storage_error = _note(self.store.error)
+        layout = ui_kit.page_layout(QVBoxLayout(self))
+        self.storage_error = ui_kit.set_role(_note(self.store.error), "error")
         self.storage_error.setObjectName("commandStorageError")
         self.storage_error.setVisible(bool(self.store.error))
         layout.addWidget(self.storage_error)
@@ -237,7 +237,7 @@ class CommandLibraryPage(QWidget):
 
     def _build_library(self) -> None:
         page = QWidget()
-        layout = QVBoxLayout(page)
+        layout = ui_kit.tab_layout(QVBoxLayout(page))
         row = QHBoxLayout()
         row.addWidget(QLabel("当前设备"))
         self.device_input = QLineEdit("未选择设备")
@@ -272,7 +272,7 @@ class CommandLibraryPage(QWidget):
         self.favorites_only.toggled.connect(self._refresh_library)
         filters.addWidget(self.favorites_only)
         layout.addLayout(filters)
-        self.count_label = QLabel()
+        self.count_label = ui_kit.set_role(QLabel(), "hint")
         layout.addWidget(self.count_label)
         self.table = _table(["收藏", "名称", "分类", "执行类型", "模式", "命令摘要", "最近状态"], "commandTable")
         self.table.horizontalHeader().setStretchLastSection(False)
@@ -284,6 +284,7 @@ class CommandLibraryPage(QWidget):
         self.table.itemChanged.connect(self._library_item_changed)
         self.table.cellDoubleClicked.connect(lambda row, col: self.open_execution(self.table.item(row, 1).data(Qt.ItemDataRole.UserRole)) if col else None)
         layout.addWidget(self.table, 1)
+        ui_kit.install_empty_state(self.table, lambda: "没有可显示的命令\n调整搜索、分类或「仅收藏」筛选，或点击「新建命令」")
         bottom = QHBoxLayout()
         self.selection_label = _note("选择命令后可执行；双击名称打开参数预览。")
         bottom.addWidget(self.selection_label, 1)
@@ -294,7 +295,7 @@ class CommandLibraryPage(QWidget):
 
     def _build_editor(self) -> None:
         page = QWidget()
-        layout = QVBoxLayout(page)
+        layout = ui_kit.tab_layout(QVBoxLayout(page))
         header = QHBoxLayout()
         self.editor_title = QLabel("创建命令")
         header.addWidget(self.editor_title, 1)
@@ -358,11 +359,11 @@ class CommandLibraryPage(QWidget):
         ):
             title = QLabel(heading)
             title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-            title.setStyleSheet("font-weight: 600;")
+            ui_kit.set_role(title, "section")
             note.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
             note.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
             note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            note.setStyleSheet("color: #476173; font-weight: normal;")
+            ui_kit.set_role(note, "hint")
             help_form.addRow(title, note)
         content_layout.addWidget(help_box)
         content_layout.addStretch()
@@ -379,8 +380,8 @@ class CommandLibraryPage(QWidget):
 
     def _build_command_management(self) -> None:
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.addWidget(_note("管理全部已保存命令。取消显示不会删除命令；隐藏命令需先启用显示才能执行。这不是权限控制，也不会取消已提交的任务。"))
+        layout = ui_kit.tab_layout(QVBoxLayout(page))
+        layout.addWidget(ui_kit.info_note("取消显示不会删除命令，也不是权限控制。", "管理全部已保存命令。取消显示不会删除命令；隐藏命令需先启用显示才能执行。这不是权限控制，也不会取消已提交的任务。"))
         self.management_search = QLineEdit()
         self.management_search.setObjectName("commandManagementSearch")
         self.management_search.setPlaceholderText("搜索名称、描述、标签或模板")
@@ -402,6 +403,7 @@ class CommandLibraryPage(QWidget):
         self.management_table.itemChanged.connect(self._management_item_changed)
         self.management_table.cellDoubleClicked.connect(self._edit_managed_row)
         layout.addWidget(self.management_table, 1)
+        ui_kit.install_empty_state(self.management_table, lambda: "没有匹配的命令\n调整搜索词，或点击「新建命令」")
         actions = QHBoxLayout()
         self.management_new_button = _button("新建命令", lambda: self.edit_command(), actions)
         self.management_edit_button = _button("编辑所选", lambda: self.edit_command(self._managed_id()), actions)
@@ -413,9 +415,9 @@ class CommandLibraryPage(QWidget):
 
     def _build_history(self) -> None:
         page = QWidget()
-        layout = QVBoxLayout(page)
+        layout = ui_kit.tab_layout(QVBoxLayout(page))
         toolbar = QHBoxLayout()
-        toolbar.addWidget(_note("来自真实任务执行器；包含运行中的任务。清空仅删除已结束的 ADB 执行历史，不停止任务，也不清除当前会话的任务输出。"), 1)
+        toolbar.addWidget(ui_kit.info_note("清空只删除已结束的执行历史，不会停止任务。", "来自真实任务执行器；包含运行中的任务。清空仅删除已结束的 ADB 执行历史，不停止任务，也不清除当前会话的任务输出。"), 1)
         self.history_output_button = _button("查看所选输出", self._show_history_output, toolbar)
         self.history_output_button.setEnabled(False)
         self.clear_history_button = _button("清空历史", self._clear_history, toolbar)
@@ -430,6 +432,7 @@ class CommandLibraryPage(QWidget):
         self.history_table.cellDoubleClicked.connect(lambda row, col: self._show_history_output())
         self.history_table.itemSelectionChanged.connect(self._history_selection_changed)
         layout.addWidget(self.history_table, 1)
+        ui_kit.install_empty_state(self.history_table, lambda: "暂无执行历史\n在命令库执行命令后会显示在这里")
         self.tabs.addTab(page, "执行历史")
 
     def set_runtime_error(self, message: str) -> None:

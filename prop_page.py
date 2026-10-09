@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from android_backend import TaskRunner
 from android_props import PropController
+import ui_kit
 
 
 def _note(text: str) -> QLabel:
@@ -83,8 +84,7 @@ class PropPage(QWidget):
         self._controller_changed()
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout = ui_kit.page_layout(QVBoxLayout(self))
         device_row = QHBoxLayout()
         device_row.addWidget(QLabel("当前设备"))
         self.device_input = QLineEdit()
@@ -105,11 +105,13 @@ class PropPage(QWidget):
 
         self.status_label = _note("")
         self.status_label.setObjectName("propStatus")
+        ui_kit.set_role(self.status_label, "hint")
         layout.addWidget(self.status_label)
         self.error_label = _note("")
         self.error_label.setObjectName("propError")
-        self.error_label.setStyleSheet("color: #b42318;")
+        ui_kit.set_role(self.error_label, "error")
         self.error_scroll = QScrollArea()
+        ui_kit.set_role(self.error_scroll, "banner")
         self.error_scroll.setWidgetResizable(True)
         self.error_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self.error_scroll.setMinimumHeight(50)
@@ -169,6 +171,9 @@ class PropPage(QWidget):
         self.table.setMinimumWidth(250)
         self.table.itemSelectionChanged.connect(self._selection_changed)
         splitter.addWidget(self.table)
+        ui_kit.install_empty_state(self.table, lambda: ui_kit.device_empty_text(
+            self.controller.serial, self.controller.device_state, self.table, self.status_label.text(), "暂无属性 · 点击「刷新属性」读取"),
+            self.controller.changed)
 
         editor_scroll = QScrollArea()
         self.editor_scroll = editor_scroll
@@ -196,7 +201,7 @@ class PropPage(QWidget):
         editor_layout.addWidget(self.editor_device_label)
         self.editor_error_label = _note("")
         self.editor_error_label.setObjectName("propEditorError")
-        self.editor_error_label.setStyleSheet("color: #b42318;")
+        ui_kit.set_role(self.editor_error_label, "error")
         editor_layout.addWidget(self.editor_error_label)
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
@@ -244,7 +249,8 @@ class PropPage(QWidget):
         self.write_button.clicked.connect(self._write)
         actions.addWidget(self.write_button)
         editor_layout.addLayout(actions)
-        editor_layout.addWidget(_note(
+        editor_layout.addWidget(ui_kit.info_note(
+            "前缀只是惯例，不保证权限；仅使用 getprop / setprop，不自动提权。",
             "ro.* 通常只读；persist.* 是持久化前缀；其他为普通属性。"
             "实际写入权限和持久化行为取决于设备，前缀不是权限保证。"
             "任何属性都可能影响系统服务。仅使用 getprop / setprop，"

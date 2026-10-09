@@ -8,16 +8,19 @@ from typing import Callable
 # Embedded Python does not add the script directory to sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from PySide6.QtCore import QPointF, QRectF, QSettings, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtCore import QSettings, QSize, Qt, QTimer
+from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QBoxLayout, QCheckBox, QComboBox, QGroupBox,
+    QAbstractItemView, QApplication, QBoxLayout, QButtonGroup, QCheckBox, QComboBox, QFrame, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
     QMenu, QMenuBar, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
-    QSizePolicy, QSplitter, QStackedWidget, QStatusBar, QStyle, QStyleFactory,
+    QSizePolicy, QSplitter, QStackedWidget, QStatusBar, QStyleFactory,
     QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
 )
 
+import theme
+import ui_kit
+from app_info import APP_NAME, APP_TITLE, APP_VERSION
 from android_backend import DATA_DIR, STATUS_LABELS, Device, Task, TaskRunner, parse_devices
 from command_library import CommandLibraryPage
 from prop_page import PropPage
@@ -30,55 +33,15 @@ from apk_page import ApkPage
 from process_page import ProcessPage
 
 
-APP_NAME = "Android Toolbox"
+DOCK_LOG, DOCK_TASKS = 0, 1
 
 
-_PAGE_ICON_PATHS = {
-    "home": (((7, 2), (17, 2), (17, 22), (7, 22), (7, 2)),
-             ((10, 5), (14, 5)), ((11, 19), (13, 19))),
-    "commands": (((2, 4), (22, 4), (22, 20), (2, 20), (2, 4)),
-                 ((6, 9), (9, 12), (6, 15)), ((12, 15), (17, 15))),
-    "props": (((3, 3), (21, 3), (21, 21), (3, 21), (3, 3)),
-              ((6, 7), (9, 7)), ((12, 7), (18, 7)),
-              ((6, 12), (9, 12)), ((12, 12), (18, 12)),
-              ((6, 17), (9, 17)), ((12, 17), (18, 17))),
-    "settings": (((10, 2), (14, 2), (14.5, 5), (16, 6), (18.5, 5), (20.5, 8.5),
-                  (18, 10.5), (18, 13.5), (20.5, 15.5), (18.5, 19), (16, 18),
-                  (14.5, 19), (14, 22), (10, 22), (9.5, 19), (8, 18), (5.5, 19),
-                  (3.5, 15.5), (6, 13.5), (6, 10.5), (3.5, 8.5), (5.5, 5),
-                  (8, 6), (9.5, 5), (10, 2)),),
-    "apks": (((12, 2), (21, 7), (21, 17), (12, 22), (3, 17), (3, 7), (12, 2)),
-             ((3, 7), (12, 12), (21, 7)), ((12, 12), (12, 22)), ((8, 4.2), (17, 9.2))),
-    "processes": (((2, 3), (22, 3), (22, 21), (2, 21), (2, 3)),
-                  ((5, 14), (8, 14), (10, 8), (13, 17), (15, 11), (19, 11))),
-    "scrcpy": (((3, 3), (21, 3), (21, 16), (3, 16), (3, 3)),
-               ((12, 16), (12, 21)), ((8, 21), (16, 21)),
-               ((10, 7), (15, 9.5), (10, 12), (10, 7))),
-    "output": (((4, 2), (15, 2), (21, 8), (21, 22), (4, 22), (4, 2)),
-               ((15, 2), (15, 8), (21, 8)), ((8, 12), (17, 12)),
-               ((8, 16), (17, 16)), ((8, 19), (14, 19))),
-}
-
-
-def _page_icon(key: str) -> QIcon:
-    paths = [QPolygonF([QPointF(x, y) for x, y in points]) for points in _PAGE_ICON_PATHS[key]]
-    icon = QIcon()
-    for mode, color in ((QIcon.Mode.Normal, "#425c70"), (QIcon.Mode.Selected, "#ffffff")):
-        for ratio in (1, 2, 3):
-            pixmap = QPixmap(24 * ratio, 24 * ratio)
-            pixmap.setDevicePixelRatio(ratio)
-            pixmap.fill(Qt.GlobalColor.transparent)
-            painter = QPainter(pixmap)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            painter.setPen(QPen(QColor(color), 1.8, Qt.PenStyle.SolidLine,
-                                Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-            for path in paths:
-                painter.drawPolyline(path)
-            if key == "settings":
-                painter.drawEllipse(QRectF(9, 9, 6, 6))
-            painter.end()
-            icon.addPixmap(pixmap, mode)
-    return icon
+def _setting_bool(value, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    return default
 
 
 class AndroidToolboxWindow(QMainWindow):
@@ -95,8 +58,10 @@ class AndroidToolboxWindow(QMainWindow):
 
     def __init__(self, runtime_error: str = "") -> None:
         super().__init__()
-        QApplication.styleHints().setColorScheme(Qt.ColorScheme.Light)
-        self.setWindowTitle(APP_NAME)
+        self.setWindowTitle(APP_TITLE)
+        self.setWindowIcon(theme.app_icon())
+        if QApplication.instance() is not None:
+            QApplication.instance().setWindowIcon(self.windowIcon())
         self.setMinimumSize(980, 650)
         self.resize(1450, 900)
         self.runner = TaskRunner(self)
@@ -105,7 +70,9 @@ class AndroidToolboxWindow(QMainWindow):
         self._device_state = ""
         self._active_page_key = ""
         self._dock_collapsed = False
-        self._log_collapsed = False
+        self._panel_collapsed = False
+        self._dock_view = DOCK_TASKS
+        self._themed_icons: list[tuple[object, str]] = []
         self._dock_ratio = 0.25
         self._dock_initialized = False
         self._device_serial = ""
@@ -115,12 +82,19 @@ class AndroidToolboxWindow(QMainWindow):
         self._logs: list[tuple[str, str]] = []
         self._closing = False
         self._settings = QSettings(str(DATA_DIR / "workspace.ini"), QSettings.Format.IniFormat)
-        self._page_icons = {key: _page_icon(key) for key in self.PAGE_INFO}
+        self._panel_collapsed = _setting_bool(self._settings.value("ui/dock_collapsed"), False)
+        try:
+            self._dock_view = DOCK_LOG if int(self._settings.value("ui/dock_view", DOCK_TASKS)) == DOCK_LOG else DOCK_TASKS
+        except (TypeError, ValueError):
+            pass
+        self.theme = theme.ThemeManager(self._settings, self)
+        self.theme.apply()
         self._build_menu_bar()
         self._build_tool_bar()
         self._build_body()
         self._build_status_bar()
-        self._apply_style()
+        self.theme.changed.connect(self._theme_changed)
+        self._theme_changed()
         self.runner.error.connect(lambda message: self._write_log("[ERROR] " + message))
         self.runner.task_added.connect(self._task_added)
         self.runner.task_finished.connect(self._task_finished)
@@ -162,17 +136,19 @@ class AndroidToolboxWindow(QMainWindow):
                     if action.text() in {"刷新设备", "ADB 终端", self.PAGE_INFO["scrcpy"][0]}:
                         action.setEnabled(False)
         else:
-            self._write_log("[INFO] Android Toolbox 已启动；正在查询真实设备。")
+            self._write_log(f"[INFO] {APP_NAME} 已启动；正在查询真实设备。")
             QTimer.singleShot(0, self._refresh_devices)
 
-    def _standard_icon(self, pixmap: QStyle.StandardPixmap) -> QIcon:
-        return self.style().standardIcon(pixmap)
+    def _themed(self, target, key: str):
+        """Register an action or list item whose line icon follows the theme colors."""
+        self._themed_icons.append((target, key))
+        return target
 
-    def _action(self, text: str, pixmap: QStyle.StandardPixmap | QIcon, callback: Callable) -> QAction:
-        icon = pixmap if isinstance(pixmap, QIcon) else self._standard_icon(pixmap)
-        action = QAction(icon, text, self)
+    def _action(self, text: str, icon_key: str, callback: Callable) -> QAction:
+        action = QAction(text, self)
+        action.setToolTip(text)
         action.triggered.connect(callback)
-        return action
+        return self._themed(action, icon_key)
 
     def _button(self, text: str, callback: Callable, primary: bool = False) -> QPushButton:
         button = QPushButton(text)
@@ -194,20 +170,28 @@ class AndroidToolboxWindow(QMainWindow):
         device_menu.addAction("断开当前无线设备", self._disconnect_device)
         view_menu = menu_bar.addMenu("视图(&V)")
         for key, (title, _) in self.PAGE_INFO.items():
-            action = QAction(self._page_icons[key], title, self)
+            action = self._themed(QAction(title, self), key)
             action.setToolTip(self.PAGE_INFO[key][1])
             action.triggered.connect(lambda checked=False, page=key: self._select_page(page))
             view_menu.addAction(action)
-        view_menu.addAction("展开 / 收起活动日志", self._toggle_log)
+        view_menu.addSeparator()
+        view_menu.addAction("展开 / 收起底部面板", self._toggle_log)
+        theme_menu = view_menu.addMenu("主题")
+        self._theme_group = QActionGroup(self)
+        self._theme_group.setExclusive(True)
+        self._theme_actions: dict[str, QAction] = {}
+        for mode in theme.MODES:
+            action = theme_menu.addAction(theme.MODE_LABELS[mode])
+            action.setCheckable(True)
+            action.setChecked(mode == self.theme.mode)
+            action.triggered.connect(lambda checked=False, value=mode: self._set_theme(value))
+            self._theme_group.addAction(action)
+            self._theme_actions[mode] = action
         tools_menu = menu_bar.addMenu("工具(&T)")
         tools_menu.addAction("ADB Root", self._adb_root)
         tools_menu.addAction("打开内置 ADB 终端", self._open_terminal)
         help_menu = menu_bar.addMenu("帮助(&H)")
-        help_menu.addAction("关于 Android Toolbox", self._show_about)
-        self.page_context = QLabel()
-        self.page_context.setObjectName("pageContext")
-        self.page_context.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        menu_bar.setCornerWidget(self.page_context, Qt.Corner.TopRightCorner)
+        help_menu.addAction(f"关于 {APP_NAME}", self._show_about)
 
     def _build_tool_bar(self) -> None:
         toolbar = QToolBar("主工具栏", self)
@@ -216,15 +200,20 @@ class AndroidToolboxWindow(QMainWindow):
         toolbar.setIconSize(QSize(18, 18))
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.addToolBar(toolbar)
-        brand = QLabel("  ▸  Android Toolbox")
+        logo = QLabel()
+        logo.setPixmap(self.windowIcon().pixmap(QSize(20, 20)))
+        logo.setContentsMargins(4, 0, 0, 0)
+        toolbar.addWidget(logo)
+        brand = QLabel(APP_NAME)
         brand.setObjectName("brandLabel")
+        brand.setToolTip(f"{APP_TITLE} v{APP_VERSION}")
         toolbar.addWidget(brand)
         toolbar.addSeparator()
         for text, icon, callback in [
-            ("刷新设备", QStyle.StandardPixmap.SP_BrowserReload, self._refresh_devices),
-            ("ADB 终端", QStyle.StandardPixmap.SP_CommandLink, self._open_terminal),
-            (self.PAGE_INFO["scrcpy"][0], self._page_icons["scrcpy"], lambda: self._select_page("scrcpy")),
-            (self.PAGE_INFO["output"][0], self._page_icons["output"], lambda: self._select_page("output")),
+            ("刷新设备", "refresh", self._refresh_devices),
+            ("ADB 终端", "terminal", self._open_terminal),
+            (self.PAGE_INFO["scrcpy"][0], "scrcpy", lambda: self._select_page("scrcpy")),
+            (self.PAGE_INFO["output"][0], "output", lambda: self._select_page("output")),
         ]:
             toolbar.addAction(self._action(text, icon, callback))
         toolbar.addSeparator()
@@ -239,9 +228,12 @@ class AndroidToolboxWindow(QMainWindow):
         toolbar.addWidget(spacer)
         self.connected = QPushButton("设备未连接")
         self.connected.setObjectName("connectedButton")
+        self.connected.setToolTip("当前设备状态 · 点击刷新设备列表")
+        self.connected.setCursor(Qt.CursorShape.PointingHandCursor)
+        ui_kit.set_state(self.connected, "off")
         self.connected.clicked.connect(self._refresh_devices)
         toolbar.addWidget(self.connected)
-        toolbar.addAction(self._action("关于", QStyle.StandardPixmap.SP_MessageBoxInformation, self._show_about))
+        toolbar.addAction(self._action("关于", "info", self._show_about))
 
     def _build_body(self) -> None:
         shell = QWidget()
@@ -251,34 +243,39 @@ class AndroidToolboxWindow(QMainWindow):
         shell_layout.setSpacing(0)
         nav_panel = QWidget()
         nav_panel.setObjectName("navPanel")
+        nav_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         nav_panel.setMinimumWidth(160)
         nav_panel.setMaximumWidth(220)
         self.nav_panel = nav_panel
         nav_layout = QVBoxLayout(nav_panel)
         nav_layout.setContentsMargins(0, 0, 0, 0)
-        nav_layout.addWidget(QLabel("  功能"))
         self.navigation = QListWidget()
         self.navigation.setObjectName("navigation")
         self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.navigation.setIconSize(QSize(20, 20))
+        self.navigation.setIconSize(QSize(18, 18))
+        self.navigation.setFrameShape(QFrame.Shape.NoFrame)
         self._nav_items = {}
         groups = [
             ("设备工具", ("home", "commands", "props", "settings", "apks", "processes", "scrcpy")),
             ("运行记录", ("output",)),
         ]
+        heading_font = QFont(self.font())
+        heading_font.setPointSizeF(max(7.5, heading_font.pointSizeF() - 0.5))
+        heading_font.setWeight(QFont.Weight.DemiBold)
         for group, entries in groups:
             heading = QListWidgetItem(group)
             heading.setFlags(Qt.ItemFlag.NoItemFlags)
-            heading.setSizeHint(QSize(200, 28))
+            heading.setFont(heading_font)
+            heading.setSizeHint(QSize(200, 30))
             self.navigation.addItem(heading)
             for key in entries:
                 title, description = self.PAGE_INFO[key]
-                item = QListWidgetItem(self._page_icons[key], title)
+                item = QListWidgetItem(title)
                 item.setToolTip(f"{title}\n{description}")
                 item.setData(Qt.ItemDataRole.UserRole, key)
                 item.setSizeHint(QSize(200, 34))
                 self.navigation.addItem(item)
-                self._nav_items[key] = item
+                self._nav_items[key] = self._themed(item, key)
         self.navigation.currentItemChanged.connect(self._switch_page)
         nav_layout.addWidget(self.navigation, 1)
         shell_layout.addWidget(nav_panel)
@@ -286,6 +283,18 @@ class AndroidToolboxWindow(QMainWindow):
         workspace_layout = QVBoxLayout(workspace)
         workspace_layout.setContentsMargins(0, 0, 0, 0)
         workspace_layout.setSpacing(0)
+        header = QWidget()
+        header.setObjectName("pageHeader")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(ui_kit.PAGE_MARGIN, 10, ui_kit.PAGE_MARGIN, 0)
+        header_layout.setSpacing(1)
+        self.page_title = ui_kit.set_role(QLabel(), "pageTitle")
+        self.page_subtitle = ui_kit.set_role(QLabel(), "pageSubtitle")
+        self.page_subtitle.setWordWrap(True)
+        self.page_subtitle.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        header_layout.addWidget(self.page_title)
+        header_layout.addWidget(self.page_subtitle)
+        workspace_layout.addWidget(header)
         self.workspace_splitter = QSplitter(Qt.Orientation.Vertical)
         self.pages = QStackedWidget()
         self.pages.setObjectName("pages")
@@ -313,16 +322,41 @@ class AndroidToolboxWindow(QMainWindow):
         self.process_page.log_message.connect(self._write_log)
         if hasattr(self.scrcpy_page, "show_output"):
             self.scrcpy_page.show_output.connect(self._show_task)
-        self.bottom = QStackedWidget()
+        self.bottom = QWidget()
+        self.bottom.setObjectName("bottomDock")
+        bottom_layout = QVBoxLayout(self.bottom)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(0)
+        self.dock_header = QWidget()
+        self.dock_header.setObjectName("dockHeader")
+        self.dock_header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        dock_layout = QHBoxLayout(self.dock_header)
+        dock_layout.setContentsMargins(8, 2, 8, 2)
+        dock_layout.setSpacing(2)
+        self._dock_group = QButtonGroup(self)
+        self._dock_group.setExclusive(True)
+        for index, text in ((DOCK_LOG, "活动日志"), (DOCK_TASKS, "任务")):
+            button = ui_kit.set_role(QPushButton(text), "segment")
+            button.setCheckable(True)
+            self._dock_group.addButton(button, index)
+            dock_layout.addWidget(button)
+        self._dock_group.idClicked.connect(lambda index: self._set_dock_view(index, remember=True))
+        dock_layout.addStretch()
+        self.log_toggle = self._button("收起", self._toggle_log)
+        self.log_toggle.setToolTip("展开或收起底部面板；选择会被记住")
+        dock_layout.addWidget(self.log_toggle)
+        self.bottom_stack = QStackedWidget()
         self.log_panel = self._build_log_panel()
-        self.bottom.addWidget(self.log_panel)
-        self.bottom.addWidget(self.task_panel)
+        self.bottom_stack.addWidget(self.log_panel)
+        self.bottom_stack.addWidget(self.task_panel)
+        bottom_layout.addWidget(self.dock_header)
+        bottom_layout.addWidget(self.bottom_stack, 1)
         self.workspace_splitter.addWidget(self.pages)
         self.workspace_splitter.addWidget(self.bottom)
         self.workspace_splitter.setStretchFactor(0, 1)
         self.workspace_splitter.setStretchFactor(1, 0)
         self.workspace_splitter.splitterMoved.connect(self._dock_moved)
-        workspace_layout.addWidget(self.workspace_splitter)
+        workspace_layout.addWidget(self.workspace_splitter, 1)
         shell_layout.addWidget(workspace, 1)
         self.setCentralWidget(shell)
         quick = QAction("快速执行", self)
@@ -333,82 +367,89 @@ class AndroidToolboxWindow(QMainWindow):
     def _build_adb_home_page(self) -> QWidget:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         page = QWidget()
         page.setObjectName("adbHomePage")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(12, 10, 12, 8)
-        top = QHBoxLayout()
-        summary = QGroupBox("当前设备")
-        summary_layout = QVBoxLayout(summary)
-        self.device_model = QLabel("未选择设备")
+        layout = ui_kit.page_layout(QVBoxLayout(page))
+        card = ui_kit.set_role(QFrame(), "card")
+        card.setObjectName("deviceCard")
+        card_layout = QHBoxLayout(card)
+        card_layout.setContentsMargins(16, 14, 16, 14)
+        card_layout.setSpacing(24)
+        info = QVBoxLayout()
+        info.setSpacing(4)
+        self.device_model = ui_kit.set_role(QLabel("未选择设备"), "cardTitle")
         self.device_model.setObjectName("deviceModel")
-        summary_layout.addWidget(self.device_model)
+        info.addWidget(self.device_model)
         self.current_device_input = QLineEdit()
+        self.current_device_input.setObjectName("currentSerial")
         self.current_device_input.setReadOnly(True)
-        summary_layout.addWidget(self.current_device_input)
-        self.device_details = QLabel("Product / Device / Transport：—")
+        self.current_device_input.setPlaceholderText("未选择设备 · 连接后在此显示 Serial")
+        info.addWidget(self.current_device_input)
+        self.device_details = ui_kit.set_role(QLabel("Product / Device / Transport：—"), "hint")
         self.device_details.setWordWrap(True)
-        summary_layout.addWidget(self.device_details)
+        info.addWidget(self.device_details)
         self.android_version = QLabel("Android：未检测")
-        summary_layout.addWidget(self.android_version)
+        info.addWidget(self.android_version)
+        pills = QHBoxLayout()
+        pills.setSpacing(6)
+        self.privilege_labels = {}
+        for name in ("Root", "Remount", "Debuggable"):
+            label = ui_kit.set_role(QLabel(f"{name}：未检测"), "pill", state="off")
+            label.setObjectName("statusPill")
+            self.privilege_labels[name] = label
+            pills.addWidget(label)
+        pills.addStretch()
+        info.addSpacing(4)
+        info.addLayout(pills)
         actions = QHBoxLayout()
-        for text, callback in [("刷新", self._refresh_devices), ("无线连接", self._focus_wireless),
-                               ("打开终端", self._open_terminal)]:
-            actions.addWidget(self._button(text, callback))
-        summary_layout.addLayout(actions)
-        top.addWidget(summary, 1)
-        connection = QGroupBox("ADB 连接 · 全局上下文")
-        connection_layout = QVBoxLayout(connection)
-        connection_layout.addWidget(QLabel("无线 ADB 地址"))
+        actions.setSpacing(6)
+        actions.addWidget(self._button("获取状态", self._query_status, True))
+        actions.addWidget(self._button("打开终端", self._open_terminal))
+        actions.addWidget(self._button("ADB Root", self._adb_root))
+        self.remount_button = self._button("ADB Remount", self._adb_remount)
+        self.remount_button.setEnabled(False)
+        actions.addWidget(self.remount_button)
+        actions.addStretch()
+        info.addSpacing(6)
+        info.addLayout(actions)
+        card_layout.addLayout(info, 3)
+        connection = QVBoxLayout()
+        connection.setSpacing(6)
+        connection.addWidget(ui_kit.set_role(QLabel("无线 ADB 连接"), "section"))
         row = QHBoxLayout()
         self.address_input = QLineEdit()
         self.address_input.setPlaceholderText("例如 192.168.1.10:5555")
         self.address_input.returnPressed.connect(self._connect_wireless)
         row.addWidget(self.address_input, 1)
         row.addWidget(self._button("连接", self._connect_wireless, True))
-        connection_layout.addLayout(row)
-        self.connection_note = QLabel("尚未刷新 ADB Server")
+        connection.addLayout(row)
+        self.connection_note = ui_kit.set_role(QLabel("尚未刷新 ADB Server"), "hint")
         self.connection_note.setWordWrap(True)
-        connection_layout.addWidget(self.connection_note)
-        connection_layout.addStretch()
-        top.addWidget(connection, 1)
-        layout.addLayout(top)
-        self._home_columns = [top]
-        lower = QHBoxLayout()
-        privilege = QGroupBox("ADB 特权状态 · 按当前设备检测")
-        privilege_layout = QVBoxLayout(privilege)
-        self.privilege_labels = {}
-        pills = QHBoxLayout()
-        for name in ("Root", "Remount", "Debuggable"):
-            label = QLabel(f"{name}：未检测")
-            label.setObjectName("statusPill")
-            self.privilege_labels[name] = label
-            pills.addWidget(label)
-        privilege_layout.addLayout(pills)
-        row = QHBoxLayout()
-        row.addWidget(self._button("获取状态", self._query_status))
-        row.addWidget(self._button("ADB Root", self._adb_root))
-        self.remount_button = self._button("ADB Remount", self._adb_remount)
-        self.remount_button.setEnabled(False)
-        row.addWidget(self.remount_button)
-        privilege_layout.addLayout(row)
-        lower.addWidget(privilege, 1)
-        shortcuts = QGroupBox("快捷操作")
-        shortcut_layout = QVBoxLayout(shortcuts)
-        for buttons in [[("获取 ADB 设备", self._refresh_devices), ("断开无线设备", self._disconnect_device)],
-                        [("启动 Server", lambda: self._server_action(False)),
-                         ("重启 Server", lambda: self._server_action(True)), ("ADB 版本", self._adb_version)]]:
-            row = QHBoxLayout()
-            for text, callback in buttons:
-                row.addWidget(self._button(text, callback))
-            shortcut_layout.addLayout(row)
-        lower.addWidget(shortcuts, 1)
-        layout.addLayout(lower)
-        self._home_columns.append(lower)
+        connection.addWidget(self.connection_note)
+        server_row = QHBoxLayout()
+        server_button = QPushButton("ADB Server")
+        server_button.setToolTip("设备列表与 ADB Server 操作")
+        server_menu = QMenu(server_button)
+        server_menu.addAction("获取 ADB 设备", self._refresh_devices)
+        server_menu.addAction("断开无线设备", self._disconnect_device)
+        server_menu.addSeparator()
+        server_menu.addAction("启动 Server", lambda: self._server_action(False))
+        server_menu.addAction("重启 Server", lambda: self._server_action(True))
+        server_menu.addAction("ADB 版本", self._adb_version)
+        server_button.setMenu(server_menu)
+        self.server_button = server_button
+        server_row.addWidget(server_button)
+        server_row.addStretch()
+        connection.addLayout(server_row)
+        connection.addStretch()
+        card_layout.addLayout(connection, 2)
+        layout.addWidget(card)
+        self._home_columns = [card_layout]
         box = QGroupBox("设备列表 · 双击设为当前设备")
         box_layout = QVBoxLayout(box)
         tools = QHBoxLayout()
-        self.device_hint = QLabel("正在查询设备")
+        self.device_hint = ui_kit.set_role(QLabel("正在查询设备"), "hint")
         tools.addWidget(self.device_hint, 1)
         for text, callback in [("复制 Serial", self._copy_serial), ("设为当前设备", self._select_highlighted),
                                ("刷新", self._refresh_devices)]:
@@ -424,25 +465,26 @@ class AndroidToolboxWindow(QMainWindow):
         self.device_table.verticalHeader().hide()
         self.device_table.horizontalHeader().setStretchLastSection(True)
         self.device_table.horizontalHeader().setDefaultSectionSize(140)
-        self.device_table.setMinimumHeight(130)
+        self.device_table.setMinimumHeight(150)
         self.device_table.cellDoubleClicked.connect(lambda row, column: self._select_highlighted())
         self.device_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.device_table.customContextMenuRequested.connect(self._device_context_menu)
+        ui_kit.install_empty_state(self.device_table, lambda: self._runtime_error or "未发现设备\n连接 USB 设备或输入无线 ADB 地址后点击「刷新」")
         box_layout.addWidget(self.device_table)
         layout.addWidget(box, 1)
-        hint = QLabel("仅 state=device 可执行设备命令。USB 断开需拔线；无线连接使用 adb connect / disconnect。")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
+        layout.addWidget(ui_kit.info_note(
+            "仅 state=device 的设备可执行命令；USB 设备需拔线断开。",
+            "仅 state=device 可执行设备命令。USB 断开需拔线；无线连接使用 adb connect / disconnect。"))
         scroll.setWidget(page)
         return scroll
 
     def _build_log_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(10, 5, 10, 7)
+        layout.setContentsMargins(10, 6, 10, 8)
+        layout.setSpacing(6)
         header = QHBoxLayout()
-        header.addWidget(QLabel("活动日志"))
-        self.log_count = QLabel("0 条记录")
+        self.log_count = ui_kit.set_role(QLabel("0 条记录"), "hint")
         header.addWidget(self.log_count)
         self.log_filter = QComboBox()
         self.log_filter.addItems(["全部", "INFO", "OK", "WARN", "ERROR", "VIEW"])
@@ -453,8 +495,6 @@ class AndroidToolboxWindow(QMainWindow):
         header.addWidget(self.log_auto)
         header.addStretch()
         header.addWidget(self._button("清空", self._clear_log))
-        self.log_toggle = self._button("收起", self._toggle_log)
-        header.addWidget(self.log_toggle)
         layout.addLayout(header)
         self.log_output = QPlainTextEdit()
         self.log_output.setObjectName("logOutput")
@@ -466,14 +506,25 @@ class AndroidToolboxWindow(QMainWindow):
     def _build_status_bar(self) -> None:
         bar = QStatusBar(self)
         self.setStatusBar(bar)
-        self.connection_status = QLabel("设备未连接")
         self.status_serial = QLabel("ADB：未选择设备")
         self.task_status = QLabel("活动任务 0")
-        bar.addWidget(self.connection_status)
         bar.addPermanentWidget(self.task_status)
         bar.addPermanentWidget(self.status_serial)
-        bar.addPermanentWidget(QLabel("v0.2.0"))
+        bar.addPermanentWidget(QLabel(f"{APP_NAME} v{APP_VERSION}"))
         self.runner.active_count_changed.connect(lambda count: self.task_status.setText(f"活动任务 {count}"))
+
+    def _theme_changed(self, *_args) -> None:
+        tokens = self.theme.tokens()
+        for target, key in self._themed_icons:
+            target.setIcon(theme.line_icon(key, tokens["text_muted"], tokens["accent"]))
+        if hasattr(self, "_theme_actions"):
+            self._theme_actions[self.theme.mode].setChecked(True)
+        if hasattr(self, "navigation"):
+            self.navigation.viewport().update()
+
+    def _set_theme(self, mode: str) -> None:
+        self.theme.set_mode(mode)
+        self._write_log(f"[VIEW] 主题：{theme.MODE_LABELS[mode]}")
 
     def _select_page(self, key: str) -> None:
         self.navigation.setCurrentItem(self._nav_items[key])
@@ -489,37 +540,45 @@ class AndroidToolboxWindow(QMainWindow):
             old_page.set_active(False)
         self._active_page_key = key
         title, description = self.PAGE_INFO[key]
-        self._page_description = f"{title}  ·  {description}"
-        self._update_title()
+        self.page_title.setText(title)
+        self.page_subtitle.setText(description)
         self.pages.setVisible(key != "output")
         if key in self._page_indices:
             self.pages.setCurrentIndex(self._page_indices[key])
         page = self._device_pages.get(key)
         if page is not None and not self._runtime_error and not self._closing:
             page.set_active(True)
-        self.bottom.setCurrentIndex(1 if key in {"commands", "props", "settings", "apks", "processes", "output"} else 0)
+        self._set_dock_view(DOCK_TASKS if key == "output" else self._dock_view)
         self._sync_dock_height()
         self._write_log("[VIEW] 已打开：" + title)
 
-    def _update_title(self) -> None:
-        menu = self.menuBar()
-        occupied = max((menu.actionGeometry(action).right() for action in menu.actions()), default=0)
-        available = max(0, menu.width() - occupied - 24)
-        self.page_context.setMaximumWidth(available)
-        text = getattr(self, "_page_description", "")
-        self.page_context.setText(self.page_context.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, max(0, available - 16)))
-        self.page_context.setToolTip(text)
+    def _set_dock_view(self, index: int, remember: bool = False) -> None:
+        self.bottom_stack.setCurrentIndex(index)
+        self._dock_group.button(index).setChecked(True)
+        if remember:
+            self._dock_view = index
+            self._settings.setValue("ui/dock_view", index)
+
+
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        if hasattr(self, "page_context"):
-            self._update_title()
-        if hasattr(self, "_home_columns"):
-            direction = QBoxLayout.Direction.TopToBottom if self.home_page.viewport().width() < 900 else QBoxLayout.Direction.LeftToRight
-            for layout in self._home_columns:
-                layout.setDirection(direction)
         if hasattr(self, "nav_panel"):
             self.nav_panel.setMaximumWidth(184 if self.width() >= 1100 else 160)
+        self._update_home_direction()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._update_home_direction()
+
+    def _update_home_direction(self) -> None:
+        if not hasattr(self, "_home_columns"):
+            return
+        available = self.width() - self.nav_panel.maximumWidth()
+        direction = QBoxLayout.Direction.TopToBottom if available < 900 else QBoxLayout.Direction.LeftToRight
+        for layout in self._home_columns:
+            if layout.direction() != direction:
+                layout.setDirection(direction)
 
     def _constrain_geometry(self) -> None:
         screen = self.screen() or QApplication.primaryScreen()
@@ -550,7 +609,10 @@ class AndroidToolboxWindow(QMainWindow):
         # Device pages keep their editor/list when viewing raw task output.
         if self.pages.currentWidget() not in (self.command_page, *self._device_pages.values()) or not self.pages.isVisible():
             self._select_page("output")
-        self.bottom.setCurrentIndex(1)
+        self._set_dock_view(DOCK_TASKS)
+        if self._panel_collapsed:
+            self._panel_collapsed = False
+            self._settings.setValue("ui/dock_collapsed", False)
         self._sync_dock_height()
         self.task_panel.show_task(task_id)
 
@@ -569,7 +631,7 @@ class AndroidToolboxWindow(QMainWindow):
         self.device_model.setText(device.model or device.serial if device else "未选择设备")
         self.device_details.setText(f"Product：{device.product or '—'}  ·  Device：{device.device or '—'}  ·  Transport：{device.transport or '—'}" if device else "Product / Device / Transport：—")
         self.connected.setText("设备已连接" if state == "device" else (state or "设备未连接"))
-        self.connection_status.setText("设备已连接" if state == "device" else (state or "设备未连接"))
+        ui_kit.set_state(self.connected, "ok" if state == "device" else ("warn" if state else "off"))
         self.status_serial.setText("ADB：" + (self._device_serial or "未选择设备"))
         self.command_page.set_device(self._device_serial, state)
         self.prop_page.set_device(self._device_serial, state)
@@ -579,8 +641,8 @@ class AndroidToolboxWindow(QMainWindow):
             page.set_device(self._device_serial, state)
         if changed:
             self.android_version.setText("Android：未检测")
-            for name, label in self.privilege_labels.items():
-                label.setText(f"{name}：未检测")
+            for name in self.privilege_labels:
+                self._set_pill(name, f"{name}：未检测", "off")
             self.remount_button.setEnabled(False)
             if self._device_serial:
                 self._write_log(f"[INFO] 当前设备：{self._device_serial} · {state}")
@@ -696,13 +758,19 @@ class AndroidToolboxWindow(QMainWindow):
             self._write_log("[ERROR] 设备特权状态输出不完整，请查看任务输出。")
             return
         root = lines[0].strip() == "0"
-        self.privilege_labels["Root"].setText("Root：" + ("是" if root else "否"))
-        self.privilege_labels["Debuggable"].setText("Debuggable：" + lines[1].strip())
+        self._set_pill("Root", "Root：" + ("是" if root else "否"), "ok" if root else "off")
+        debuggable = lines[1].strip()
+        self._set_pill("Debuggable", "Debuggable：" + debuggable, "ok" if debuggable == "1" else "off")
         writable = any(len(parts := line.split()) >= 4 and parts[1] in {"/", "/system", "/vendor"}
                        and "rw" in parts[3].split(",") for line in lines[3:])
-        self.privilege_labels["Remount"].setText("Remount：" + ("系统分区可写" if writable else "未见可写系统分区"))
+        self._set_pill("Remount", "Remount：" + ("系统分区可写" if writable else "未见可写系统分区"), "ok" if writable else "off")
         self.remount_button.setEnabled(root)
         self.android_version.setText("Android：" + lines[2].strip())
+
+    def _set_pill(self, name: str, text: str, state: str) -> None:
+        label = self.privilege_labels[name]
+        label.setText(text)
+        ui_kit.set_state(label, state)
 
     def _adb_root(self) -> None:
         if self._require_device() and QMessageBox.question(self, "ADB Root", "将重启当前设备的 adbd；仅调试构建支持。继续？") == QMessageBox.StandardButton.Yes:
@@ -779,19 +847,23 @@ class AndroidToolboxWindow(QMainWindow):
             self._write_log("[OK] 工作区布局已保存。")
 
     def _toggle_log(self) -> None:
-        self._log_collapsed = not self._log_collapsed
-        self.log_output.setVisible(not self._log_collapsed)
-        self.log_toggle.setText("展开" if self._log_collapsed else "收起")
+        self._panel_collapsed = not self._panel_collapsed
+        self._settings.setValue("ui/dock_collapsed", self._panel_collapsed)
         self._sync_dock_height()
 
     def _sync_dock_height(self) -> None:
-        collapsed = self.bottom.currentWidget() == self.log_panel and self._log_collapsed
+        # The task output page has no page area above the dock, so it never collapses there.
+        can_collapse = self._active_page_key != "output"
+        collapsed = self._panel_collapsed and can_collapse
+        self.log_toggle.setText("展开" if collapsed else "收起")
+        self.log_toggle.setEnabled(can_collapse)
+        self.bottom_stack.setVisible(not collapsed)
         if collapsed == self._dock_collapsed:
             return
         if collapsed:
             self._dock_moved()
             self._dock_collapsed = True
-            height = self.log_toggle.sizeHint().height() + 12
+            height = self.dock_header.sizeHint().height()
             self.bottom.setMaximumHeight(height)
             self.workspace_splitter.setSizes([self.workspace_splitter.height() - height, height])
         else:
@@ -827,7 +899,7 @@ class AndroidToolboxWindow(QMainWindow):
             self.log_output.verticalScrollBar().setValue(self.log_output.verticalScrollBar().maximum())
 
     def _show_about(self) -> None:
-        QMessageBox.information(self, "关于 Android Toolbox", "Android Toolbox v0.2.0\nPySide6 桌面安卓工具箱\n\n设备连接、ADB 命令库、系统属性与设置、应用包信息、只读进程监控、任务输出与独立投屏录制窗口。")
+        QMessageBox.about(self, f"关于 {APP_NAME}", f"<b>{APP_NAME}</b> v{APP_VERSION}<br>Android 系统开发工具箱 · PySide6 桌面应用<br><br>设备连接、ADB 命令库、系统属性与设置、应用包信息、只读进程监控、任务输出与独立投屏录制窗口。")
 
     def closeEvent(self, event) -> None:
         if self.runner.active_count:
@@ -849,37 +921,6 @@ class AndroidToolboxWindow(QMainWindow):
         self._save_workspace()
         event.accept()
 
-    def _apply_style(self) -> None:
-        self.setStyleSheet("""
-            QWidget { color: #1f1f1f; }
-            QMainWindow, QWidget#shell, QWidget#adbHomePage, QStackedWidget#pages { background: #f3f3f3; color: #1f1f1f; }
-            QMenuBar { background: #f3f3f3; border-bottom: 1px solid #d1d1d1; padding: 0 4px; }
-            QMenuBar::item { padding: 4px 8px; }
-            QMenuBar::item:selected, QMenu::item:selected { background: #d9ecfa; color: #1f1f1f; }
-            QLabel#pageContext { padding: 0 8px; color: #476173; }
-            QToolBar#mainToolbar { background: #f3f3f3; border: 0; border-bottom: 1px solid #c8c8c8; spacing: 2px; padding: 1px 4px; }
-            QToolBar#mainToolbar QToolButton { min-width: 28px; min-height: 26px; border: 1px solid transparent; padding: 2px; }
-            QToolBar#mainToolbar QToolButton:hover { background: #e5f3fb; border-color: #b7d9ec; }
-            QLabel#brandLabel { font-weight: 600; }
-            QLabel#deviceModel { font-size: 18px; font-weight: 600; }
-            QWidget#navPanel, QListWidget#navigation { background: #e9edef; border: 0; }
-            QListWidget#navigation::item { padding: 5px 10px; }
-            QListWidget#navigation::item:selected { background: #2878b5; color: white; }
-            QGroupBox { background: #fafafa; border: 1px solid #bcbcbc; margin-top: 7px; padding-top: 9px; font-weight: 600; }
-            QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 5px; }
-            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { min-height: 24px; border: 1px solid #9e9e9e; background: white; padding: 0 6px; }
-            QLineEdit:focus, QComboBox:focus { border-color: #0078d4; }
-            QTableWidget { background: white; gridline-color: #c7c7c7; selection-background-color: #cde6f7; selection-color: #202020; alternate-background-color: #f7f7f7; }
-            QHeaderView::section { background: #dcebf5; border: 1px solid #c1cbd2; padding: 5px; color: #304554; }
-            QPushButton { min-height: 26px; padding: 0 10px; border: 1px solid #9e9e9e; background: #f5f5f5; color: #202020; }
-            QPushButton:hover { background: #e5f3fb; border-color: #5b9bd5; }
-            QPushButton:disabled { color: #999; background: #ededed; border-color: #c7c7c7; }
-            QPushButton#primaryButton { background: #2878b5; border-color: #1f5f8c; color: white; font-weight: 600; }
-            QLabel#statusPill { background: #eee; border: 1px solid #bdbdbd; padding: 4px 6px; color: #555; }
-            QPlainTextEdit { background: white; border: 1px solid #9e9e9e; font-family: Consolas, "Microsoft YaHei UI"; font-size: 12px; }
-            QStatusBar { background: #e9edef; border-top: 1px solid #bdbdbd; color: #50575c; }
-            QStatusBar::item { border: 0; padding: 0 7px; }
-        """)
 
 
 def main() -> int:
@@ -888,7 +929,7 @@ def main() -> int:
         app.setStyle("windows11")
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(APP_NAME)
-    app.setFont(QFont("Microsoft YaHei UI", 9))
+    app.setFont(theme.app_font())
     runtime_error = ""
     try:
         configure_runtime()

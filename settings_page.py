@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from android_backend import TaskRunner
 from android_settings import SettingsController, SettingValue
 from android_users import AndroidUserController
+import ui_kit
 
 
 def _note(text: str = "") -> QLabel:
@@ -80,9 +81,7 @@ class SettingsPage(QWidget):
         self._controller_changed()
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(7)
+        layout = ui_kit.page_layout(QVBoxLayout(self))
         device_row = QHBoxLayout()
         device_row.addWidget(QLabel("当前设备"))
         self.device_input = QLineEdit()
@@ -116,15 +115,17 @@ class SettingsPage(QWidget):
         self.refresh_button.clicked.connect(self._refresh)
         context_row.addWidget(self.refresh_button)
         layout.addLayout(context_row)
-        self.scope_label = _note()
+        self.scope_label = ui_kit.set_role(_note(), "hint")
         layout.addWidget(self.scope_label)
         self.status_label = _note()
         self.status_label.setObjectName("settingsStatus")
+        ui_kit.set_role(self.status_label, "hint")
         layout.addWidget(self.status_label)
         self.error_label = _note()
         self.error_label.setObjectName("settingsError")
-        self.error_label.setStyleSheet("color: #b42318;")
+        ui_kit.set_role(self.error_label, "error")
         self.error_scroll = QScrollArea()
+        ui_kit.set_role(self.error_scroll, "banner")
         self.error_scroll.setWidgetResizable(True)
         self.error_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self.error_scroll.setMinimumHeight(50)
@@ -168,6 +169,9 @@ class SettingsPage(QWidget):
         self.table.setMinimumHeight(100)
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.splitter.addWidget(self.table)
+        ui_kit.install_empty_state(self.table, lambda: ui_kit.device_empty_text(
+            self.controller.serial, self.controller.device_state, self.table, self.status_label.text(), "暂无设置项 · 点击「刷新名称和值」读取"),
+            self.controller.changed)
 
         detail_scroll = QScrollArea()
         detail_scroll.setWidgetResizable(True)
@@ -221,7 +225,8 @@ class SettingsPage(QWidget):
         self.delete_button.clicked.connect(self._delete)
         change_row.addWidget(self.delete_button)
         editor_layout.addLayout(change_row)
-        editor_layout.addWidget(_note(
+        editor_layout.addWidget(ui_kit.info_note(
+            "写入前先读取最新值，提交后核对实际值；不自动提权。",
             "修改前先读取最新目标，确认后提交并核对实际值。权限由设备决定，"
             "不自动 Root/su、不重置 namespace、不修改数据库文件。"
             "列表和当前值是读取快照，并非持续同步；空字符串、文本 null 与不存在不同。"))

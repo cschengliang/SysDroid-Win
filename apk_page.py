@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout,
 from android_apks import PackageController
 from android_backend import TaskRunner
 from android_users import AndroidUserController
+import ui_kit
 
 
 class NumericItem(QTableWidgetItem):
@@ -41,9 +42,7 @@ class ApkPage(QWidget):
         self._details_rendered = None
         self._local_error = ""
         self._task_state = (False, "")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(7)
+        layout = ui_kit.page_layout(QVBoxLayout(self))
         first = QHBoxLayout()
         first.addWidget(QLabel("用户"))
         self.user_combo = QComboBox()
@@ -77,6 +76,9 @@ class ApkPage(QWidget):
         for column, width in enumerate((225, 90, 100, 90, 75, 150, 240)):
             self.table.setColumnWidth(column, width)
         self.splitter.addWidget(self.table)
+        ui_kit.install_empty_state(self.table, lambda: ui_kit.device_empty_text(
+            self.controller.serial, self.controller.device_state, self.table, self.status.text(), "暂无应用包 · 选择用户后点击「刷新」"),
+            self.controller.changed)
         self.tabs = QTabWidget()
         self.basic = QTextEdit()
         self.permissions = QTextEdit()
@@ -94,13 +96,15 @@ class ApkPage(QWidget):
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         error_scroll = QScrollArea()
+        ui_kit.set_role(error_scroll, "statusBox")
         error_scroll.setWidgetResizable(True)
         error_scroll.setMinimumHeight(50)
         error_scroll.setMaximumHeight(110)
-        self.error = QLabel()
+        self.error = ui_kit.set_role(QLabel(), "error")
         self.error.setWordWrap(True)
         self.error.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         messages = QWidget()
+        messages.setObjectName("statusBoxContent")
         messages_layout = QVBoxLayout(messages)
         messages_layout.setContentsMargins(6, 4, 6, 4)
         messages_layout.addWidget(self.status)
