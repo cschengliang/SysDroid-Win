@@ -756,3 +756,17 @@ def test_invalid_json_cannot_submit_previous_valid_proposal(settings_runner, set
     page._write()
     assert len(settings_runner.requests) == count
     assert not page.write_button.isEnabled() and page.error_label.text()
+
+
+def test_loader_noise_on_stderr_does_not_fail_a_verified_refresh(settings_runner, controller):
+    device = DeviceSettings({(10, "secure", "key"): "value"})
+    controller.refresh()
+    noise = "WARNING: linker: /system/bin/app_process64: unused DT entry: type 0x6ffffef5\n"
+    for _ in range(100):
+        if not controller.busy:
+            break
+        task = settings_runner.requests[-1]
+        output = device.batch_output(task) if task.args[-1].startswith("printf ") else device._response(tokens(task))
+        settings_runner.finish(task, output, noise)
+    assert controller.values == {"key": SettingValue(True, "value")}
+    assert not controller.error and not controller.busy

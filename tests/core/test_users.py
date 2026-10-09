@@ -115,3 +115,33 @@ def test_device_switch_during_submission_discards_old_discovery(qapp):
     runner.finish('10\n')
     assert controller.users == {10: 'New'} and controller.current_user == 10
     assert not controller.busy and not controller.error
+
+
+def test_vendor_banner_and_decorated_records_are_tolerated():
+    output = ("WARNING: linker: libfoo.so: unused DT entry\n"
+              "Users:\n"
+              "\tUserInfo{0:机主:c13} running (current)\n"
+              "\n"
+              "\tsome vendor note\n"
+              "\tUserInfo{10:Work: profile:1030} running\n")
+    assert parse_users(output) == {0: "机主", 10: "Work: profile"}
+
+
+def test_loader_noise_on_stderr_does_not_discard_valid_users(qapp):
+    runner = ManualRunner()
+    controller = AndroidUserController(runner)
+    controller.set_device("a")
+    controller.refresh()
+    noise = "WARNING: linker: /system/bin/app_process64: unused DT entry: type 0x6ffffef5\n"
+    runner.finish("Users:\n UserInfo{0:Owner:c13} running\n", noise)
+    runner.finish("0\n", noise)
+    assert controller.users == {0: "Owner"} and controller.current_user == 0 and not controller.error
+
+
+def test_real_stderr_diagnostics_still_fail_user_discovery(qapp):
+    runner = ManualRunner()
+    controller = AndroidUserController(runner)
+    controller.set_device("a")
+    controller.refresh()
+    runner.finish("Users:\n UserInfo{0:Owner:c13} running\n", "SecurityException: denied\n")
+    assert controller.users == {} and "SecurityException" in controller.error
