@@ -1,0 +1,18 @@
+# Embedded Python runtime and bundled third-party tools (large binaries)
+/lib/
+/tool/
+
+# Build output
+/build/
+/dist/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual envs / IDE
+.venv/
+venv/
+.idea/
+.vscode/

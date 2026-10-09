@@ -1,0 +1,368 @@
+import shlex
+from pathlib import Path
+
+import pytest
+from PySide6.QtCore import QObject, Signal
+
+from android_backend import Task
+from android_apks import PackageController, parse_package_dump, parse_package_list, parse_package_paths
+
+
+class Runner(QObject):
+    task_added = Signal(object)
+    task_finished = Signal(object)
+
+    def __init__(self):
+        super().__init__()
+        self.requests = []
+
+    def start_adb(self, title, args, serial='', command_id='', timeout=10):
+        task = Task(str(len(self.requests)), title, 'adb', list(args), serial, command_id)
+        task.status = 'running'
+        self.requests.append(task)
+        self.task_added.emit(task)
+        return task
+
+    def finish(self, output='', stderr='', code=0):
+        task = self.requests[-1]
+        task.stdout, task.stderr, task.exit_code = output, stderr, code
+        task.status = 'succeeded' if code == 0 else 'failed'
+        self.task_finished.emit(task)
+        return task
+
+
+def dump(version=10, users=True):
+    return ('Packages:\n  Package [com.example.app] (abcd):\n'
+        '    userId=10023\n    versionCode=' + str(version) + ' minSdk=21 targetSdk=36\n'
+        '    versionName=1.0\n    codePath=/data/app/a\n'
+        '    flags=[ SYSTEM DEBUGGABLE ]\n'
+        '    requested permissions:\n      android.permission.INTERNET\n'
+        + ('    User 0: installed=true hidden=false suspended=false stopped=false enabled=0\n'
+        '      runtime permissions:\n        wrong.permission: granted=true\n'
+        '    User 10: installed=false hidden=true suspended=true stopped=true enabled=3\n'
+        '      runtime permissions:\n        correct.permission: granted=false\n' if users else '')
+        + '  Package [other.app] (efgh):\n    versionCode=999\n    User 10: installed=true enabled=1\n')
+
+
+@pytest.fixture
+def ready(qapp):
+    runner = Runner()
+    controller = PackageController(runner)
+    controller.set_device('a')
+    controller.set_user(10)
+    return runner, controller
+
+
+def complete_list(runner, members='package:com.example.app\n', system='', disabled=''):
+    if shlex.split(runner.requests[-1].args[1]) == ['pm', 'help']:
+        runner.finish('list packages [--user USER_ID]\n')
+    runner.finish(members)
+    runner.finish(system)
+    runner.finish(disabled)
+
+
+def test_rich_package_records_preserve_paths_numeric_versions_and_unknowns():
+    values = parse_package_list('package:/data/app/a space=x/base.apk=com.example.app installer=com.android.shell uid:1010023 versionCode:123\npackage:other.app\n')
+    assert values['com.example.app'].apk_path == '/data/app/a space=x/base.apk'
+    assert values['com.example.app'].uid == 1010023
+    assert values['com.example.app'].version_code == 123
+    assert values['other.app'].uid is None
+    assert values['other.app'].enabled is None
+    assert parse_package_list('') == {}
+
+
+@pytest.mark.parametrize('output', ['Error: permission denied\n', 'package:com.example.app\ntruncated\n',
+    'package:com.example.app uid:abc\n', 'package:com.example.app\npackage:com.example.app\n',
+    'package:-bad\n', 'package:com.example.app junk\n', 'package:com.example.app uid:12 garbage\n'])
+def test_invalid_list_is_never_partial_success(output):
+    with pytest.raises(ValueError):
+        parse_package_list(output)
+
+
+def test_details_use_exact_package_user_and_leave_missing_unknown():
+    result = parse_package_dump(dump(), 'com.example.app', 10)
+    assert result.version_code == 10
+    assert result.app_id == 10023 and result.uid is None
+    assert result.installed is False and result.enabled == 3
+    assert result.hidden is True and result.suspended is True
+    assert 'correct.permission' in result.permissions
+    assert 'wrong.permission' not in result.permissions
+    assert result.primary_abi is None
+    unknown = parse_package_dump(dump(users=False), 'com.example.app', 10)
+    assert unknown.installed is None and unknown.enabled is None
+    assert unknown.raw == dump(users=False)
+    with pytest.raises(ValueError):
+        parse_package_dump(dump(), 'not.present', 10)
+
+
+def test_paths_preserve_special_characters_and_reject_missing_split_records():
+    paths = parse_package_paths('package:/data/app/a $ space/base.apk\npackage:/data/app/a $ space/split_config.en.apk\n')
+    assert len(paths) == 2 and '$ space' in paths[0]
+    with pytest.raises(ValueError):
+        parse_package_paths('package:/data/base.apk\nsplit incomplete\n')
+
+
+def test_failed_required_list_preserves_last_complete_snapshot(ready):
+    runner, controller = ready
+    controller.refresh()
+    complete_list(runner)
+    old = controller.packages
+    controller.refresh()
+    runner.finish('package:other.app\n')
+    runner.finish('SecurityException: denied\n')
+    assert controller.packages == old and controller.error and not controller.busy
+
+
+def test_uninstall_and_enabled_readback_mismatch_cannot_report_success(ready):
+    runner, controller = ready
+    controller.refresh()
+    complete_list(runner)
+    controller.uninstall('com.example.app')
+    runner.finish('Success\n')
+    complete_list(runner)
+    assert controller.error and '状态未确认' in controller.status
+    controller.set_enabled('com.example.app', False)
+    runner.finish('Package com.example.app new state: disabled-user\n')
+    complete_list(runner)
+    assert controller.packages['com.example.app'].enabled is True
+    assert controller.error
+
+
+@pytest.mark.parametrize('output', ['Failure [INSTALL_FAILED_ALREADY_EXISTS]\n', 'Error: denied\n', 'Success\nSecurityException\n'])
+def test_install_failure_is_single_attempt_without_destructive_fallback(ready, tmp_path, output):
+    runner, controller = ready
+    apk = tmp_path / 'app.apk'
+    apk.write_bytes(b'apk')
+    controller.install([apk])
+    runner.finish(output)
+    assert len(runner.requests) == 1 and controller.error
+    assert not controller.busy
+
+
+def test_no_launcher_and_exit_zero_start_errors_are_failures(ready):
+    runner, controller = ready
+    controller.launch('com.example.app')
+    runner.finish('No activity found\n')
+    assert len(runner.requests) == 1 and controller.error
+    controller.launch('com.example.app')
+    runner.finish('com.example.app/.MainActivity\n')
+    runner.finish('Error: Activity not started\n')
+    assert controller.error and not controller.busy
+
+
+def test_device_switch_and_submission_reentry_cannot_publish_old_package(ready):
+    runner, controller = ready
+    controller.load_details('com.example.app')
+    controller.set_device('b')
+    runner.finish(dump())
+    assert controller.details == {} and len(runner.requests) == 1
+    runner.task_added.connect(lambda _: controller.set_user(11))
+    controller.refresh()
+    assert not controller.busy and not controller.task_id
+    runner.finish('list packages\n')
+    assert controller.packages == {}
+
+
+def start_export(runner, controller, target, version=10):
+    controller.export('com.example.app', target)
+    runner.finish(dump(version))
+    runner.finish('package:/remote/base.apk\npackage:/remote/a/split.apk\npackage:/remote/b/split.apk\n')
+
+
+def finish_pull(runner, content=b'apk', fail=False):
+    part = Path(runner.requests[-1].args[-1])
+    part.write_bytes(content)
+    runner.finish('transfer failed' if fail else '1 file pulled\n', code=1 if fail else 0)
+    return part
+
+
+def test_export_split_collision_partial_failure_keeps_existing_files(ready, tmp_path):
+    runner, controller = ready
+    existing = tmp_path / 'base.apk'
+    existing.write_bytes(b'original')
+    start_export(runner, controller, tmp_path)
+    first = finish_pull(runner)
+    second = finish_pull(runner, fail=True)
+    third = finish_pull(runner)
+    assert existing.read_bytes() == b'original'
+    assert not first.exists() and first.with_suffix('').is_file()
+    assert second.is_file() and not second.with_suffix('').exists()
+    assert not third.exists() and third.with_suffix('').is_file()
+    assert len({local for _, local in controller.export_mapping}) == 3
+    assert controller.error and not controller.busy
+
+
+def test_export_version_change_never_reports_complete(ready, tmp_path):
+    runner, controller = ready
+    start_export(runner, controller, tmp_path)
+    for _ in range(3):
+        finish_pull(runner)
+    runner.finish(dump(11))
+    runner.finish('package:/remote/base.apk\npackage:/remote/a/split.apk\npackage:/remote/b/split.apk\n')
+    assert controller.error and '期间更新' in controller.error
+    assert not controller.busy
+
+
+def test_export_switch_retains_partial_without_attaching_old_result(ready, tmp_path):
+    runner, controller = ready
+    start_export(runner, controller, tmp_path)
+    part = Path(runner.requests[-1].args[-1])
+    controller.set_device('b')
+    part.write_bytes(b'partial')
+    runner.finish('1 file pulled\n')
+    assert part.exists() and not part.with_suffix('').exists()
+    assert controller.details == {} and controller.error
+
+
+def test_page_confirmation_context_switch_never_submits_export(qapp, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    from android_users import AndroidUserController
+    from apk_page import ApkPage
+
+    runner = Runner()
+    users = AndroidUserController(runner)
+    users.set_device('a')
+    page = ApkPage(runner, users)
+    page.set_device('a')
+    page.set_active(True)
+    runner.finish('Users:\n\tUserInfo{0:Owner:13} running\n\tUserInfo{10:Work:10}\n')
+    runner.finish('10\n')
+    complete_list(runner)
+    page.table.selectRow(0)
+    before = len(runner.requests)
+
+    def switch_and_accept(box):
+        page.set_active(False)
+        page.set_active(True)
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QFileDialog, 'getExistingDirectory', lambda *args: str(tmp_path))
+    monkeypatch.setattr(QMessageBox, 'exec', switch_and_accept)
+    page._export()
+    assert len(runner.requests) == before
+    assert page.controller.packages['com.example.app'].enabled is True
+    page.deleteLater()
+    assert not tuple(tmp_path.iterdir())
+
+
+def test_page_version_sorting_and_filter_keep_selected_package(qapp):
+    from PySide6.QtCore import Qt
+    from android_users import AndroidUserController
+    from apk_page import ApkPage
+
+    runner = Runner()
+    users = AndroidUserController(runner)
+    users.set_device('a')
+    page = ApkPage(runner, users)
+    page.set_device('a')
+    page.set_active(True)
+    runner.finish('Users:\n\tUserInfo{10:Work:10} running\n')
+    runner.finish('10\n')
+    runner.finish('list packages [-f] [-i] [-U] [--show-versioncode] [--user USER_ID]\n')
+    runner.finish('package:com.example.app\npackage:other.app\n')
+    runner.finish('')
+    runner.finish('')
+    runner.finish('package:com.example.app uid:12 versionCode:100\npackage:other.app uid:2 versionCode:9\n')
+    page.table.sortItems(2, Qt.SortOrder.AscendingOrder)
+    assert page.table.item(0, 0).text() == 'other.app'
+    page.table.selectRow(1)
+    selected = page._selected()
+    page.search.setText('com.example')
+    page._filter()
+    assert page._selected() == selected
+    assert page.table.isRowHidden(0)
+    page.deleteLater()
+
+
+@pytest.mark.parametrize('hide_during_refresh', [False, True])
+def test_refresh_updates_discovered_users_and_selected_users_packages(qapp, hide_during_refresh):
+    from android_users import AndroidUserController
+    from apk_page import ApkPage
+
+    runner = Runner()
+    users = AndroidUserController(runner)
+    users.set_device('a')
+    page = ApkPage(runner, users)
+    page.set_device('a')
+    page.set_active(True)
+    runner.finish('Users:\n\tUserInfo{0:Owner:13} running\n\tUserInfo{10:Work:10}\n')
+    runner.finish('10\n')
+    complete_list(runner)
+    page.user_combo.setCurrentIndex(page.user_combo.findData(0))
+    complete_list(runner)
+    page.table.selectRow(0)
+    page._refresh()
+    if hide_during_refresh:
+        page.set_active(False)
+    runner.finish('Users:\n\tUserInfo{0:Owner:13} running\n\tUserInfo{10:Work:10}\n\tUserInfo{11:Guest:4}\n')
+    runner.finish('10\n')
+    complete_list(runner, members='package:com.example.app\npackage:new.app\n')
+    page.set_active(True)
+    assert page.controller.user_id == 0 and page.user_combo.currentData() == 0
+    assert page.user_combo.findData(11) >= 0
+    assert set(page.controller.packages) == {'com.example.app', 'new.app'}
+    assert page._selected() == 'com.example.app' and not page.controller.busy
+    page.deleteLater()
+
+
+def test_refresh_recovers_after_failed_user_discovery(qapp):
+    from android_users import AndroidUserController
+    from apk_page import ApkPage
+
+    runner = Runner()
+    users = AndroidUserController(runner)
+    users.set_device('a')
+    page = ApkPage(runner, users)
+    page.set_device('a')
+    page.set_active(True)
+    runner.finish('Error: denied\n')
+    assert page.controller.user_id is None and not page.controller.packages
+    page._refresh()
+    runner.finish('Users:\n\tUserInfo{0:Owner:13} running\n')
+    runner.finish('0\n')
+    complete_list(runner)
+    assert page.controller.user_id == 0 and set(page.controller.packages) == {'com.example.app'}
+    assert not page.error.text() and not page.controller.busy
+    page.deleteLater()
+
+
+def test_diagnostic_words_inside_package_data_do_not_reject_snapshot(ready):
+    runner, controller = ready
+    package = 'com.example.exceptiondemo'
+    controller.refresh()
+    complete_list(runner, members=f'package:{package}\n')
+    assert controller.packages[package].enabled is True
+    assert not controller.error and not controller.busy
+
+
+def test_updated_system_details_ignore_retained_factory_package():
+    hidden = '\nHidden system packages:\n  Package [com.example.app] (factory):\n    versionCode=1\n    versionName=factory\n'
+    detail = parse_package_dump(dump(version=12) + hidden, 'com.example.app', 10)
+    assert detail.version_code == 12 and detail.version_name == '1.0'
+
+
+def test_successful_replacement_invalidates_old_details_even_if_refresh_fails(ready, tmp_path):
+    runner, controller = ready
+    controller.details['com.example.app'] = parse_package_dump(dump(version=10), 'com.example.app', 10)
+    apk = tmp_path / 'replacement.apk'
+    apk.write_bytes(b'apk')
+    controller.install([apk], replace=True)
+    runner.finish('Success\n')
+    assert controller.details == {}
+    runner.finish('Error: permission denied\n')
+    assert controller.details == {} and controller.error
+
+
+@pytest.mark.parametrize('status', ['cancelled', 'timed_out'])
+def test_stopped_split_export_preserves_partial_and_submits_no_next_pull(ready, tmp_path, status):
+    runner, controller = ready
+    start_export(runner, controller, tmp_path)
+    part = Path(runner.requests[-1].args[-1])
+    part.write_bytes(b'partial APK')
+    task = runner.requests[-1]
+    task.status, task.exit_code = status, None
+    count = len(runner.requests)
+    runner.task_finished.emit(task)
+    assert len(runner.requests) == count
+    assert part.read_bytes() == b'partial APK' and not part.with_suffix('').exists()
+    assert controller.error and not controller.busy

@@ -1,0 +1,1914 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Android Toolbox · Windows 布局原型</title>
+  <style>
+    :root {
+      --win-bg: #f3f3f3;
+      --panel-bg: #fafafa;
+      --sidebar-bg: #e9edef;
+      --border: #c8cdd1;
+      --border-dark: #9b9b9b;
+      --text: #202020;
+      --muted: #616a70;
+      --blue: #2878b5;
+      --blue-dark: #1f5f8c;
+      --blue-soft: #e5f3fb;
+      --green: #23834a;
+      --warning: #a66b00;
+      --danger: #b33a3a;
+      --log-bg: #ffffff;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .08);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { height: 100%; }
+
+    body {
+      margin: 0;
+      overflow: hidden;
+      color: var(--text);
+      background: var(--win-bg);
+      font: 13px/1.35 "Segoe UI", "Microsoft YaHei UI", Arial, sans-serif;
+    }
+
+    button, input, select { font: inherit; }
+    button { color: inherit; }
+
+    .app-shell {
+      display: grid;
+      grid-template-rows: 28px 42px minmax(0, 1fr) 25px;
+      height: 100vh;
+      min-width: 1060px;
+      background: var(--win-bg);
+    }
+
+    .menu-bar {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 0 7px;
+      border-bottom: 1px solid #d1d1d1;
+      background: #f3f3f3;
+    }
+
+    .menu-page-context {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      min-width: 0;
+      margin-left: 8px;
+      padding-left: 12px;
+      border-left: 1px solid #c9ced1;
+    }
+
+    .menu-page-title {
+      flex: 0 0 auto;
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+
+    .menu-page-description {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--muted);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .menu-page-actions {
+      display: flex;
+      gap: 4px;
+      margin-left: auto;
+    }
+
+    .menu-page-actions .button {
+      min-height: 22px;
+      padding: 0 8px;
+      font-size: 12px;
+    }
+
+    .menu-item {
+      padding: 4px 9px;
+      border: 0;
+      background: transparent;
+      cursor: default;
+    }
+
+    .menu-item:hover { background: #dcecf7; }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
+      padding: 4px 7px;
+      border-bottom: 1px solid #c4c9cc;
+      background: #f3f3f3;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 205px;
+      flex: 0 0 205px;
+      padding-left: 4px;
+      font-size: 14px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      border: 1px solid #1f5f8c;
+      color: #fff;
+      background: #2878b5;
+      font-size: 13px;
+    }
+
+    .toolbar-separator {
+      width: 1px;
+      height: 24px;
+      margin: 0 3px;
+      background: #c9cdd0;
+    }
+
+    .tool-button,
+    .icon-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 28px;
+      min-width: 29px;
+      padding: 0 7px;
+      border: 1px solid transparent;
+      border-radius: 0;
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .tool-button:hover,
+    .icon-button:hover { border-color: #b7d9ec; background: var(--blue-soft); }
+
+    .tool-button .tool-label { display: none; }
+    .toolbar-spacer { flex: 1; }
+
+    .device-select {
+      width: 205px;
+      height: 28px;
+      padding: 0 7px;
+      border: 1px solid #8d8d8d;
+      border-radius: 0;
+      outline: none;
+      background: #fff;
+    }
+
+    .device-select:focus { border-color: #0078d4; }
+
+    .connection-state {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 28px;
+      padding: 0 9px;
+      border: 1px solid #9e9e9e;
+      background: #f7f7f7;
+      color: #245a7a;
+      white-space: nowrap;
+    }
+
+    .connection-state::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      content: "";
+    }
+
+    .main-layout {
+      display: grid;
+      grid-template-columns: 214px minmax(0, 1fr);
+      min-height: 0;
+    }
+
+    .sidebar {
+      min-height: 0;
+      overflow: auto;
+      border-right: 1px solid #c4c8cc;
+      background: var(--sidebar-bg);
+    }
+
+    .sidebar-title {
+      height: 31px;
+      padding: 8px 11px 6px;
+      border-bottom: 1px solid #cbd0d4;
+      color: #555e64;
+      font-weight: 600;
+    }
+
+    .nav-section { padding: 8px 0 2px; }
+
+    .nav-section-title {
+      padding: 3px 11px 4px;
+      color: #747d82;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      min-height: 31px;
+      padding: 5px 11px;
+      border: 0;
+      border-left: 3px solid transparent;
+      background: transparent;
+      color: #303438;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .nav-item:hover { background: #dcecf7; }
+
+    .nav-item.active {
+      border-left-color: #15577f;
+      background: var(--blue);
+      color: #fff;
+    }
+
+    .nav-icon {
+      width: 18px;
+      color: #56646c;
+      text-align: center;
+      font-size: 14px;
+    }
+
+    .nav-item.active .nav-icon { color: #fff; }
+
+    .workspace {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) 174px;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .content-scroll {
+      min-height: 0;
+      overflow: auto;
+      padding: 13px 15px 12px;
+    }
+
+    [hidden] { display: none !important; }
+
+    .workspace.command-workspace {
+      grid-template-rows: minmax(0, 1fr) clamp(170px, 28vh, 270px);
+    }
+
+    .command-workspace .content-scroll { padding: 0; overflow: hidden; }
+    .command-workspace .log-dock { display: none; }
+    .command-library-view { display: none; min-width: 0; min-height: 0; height: 100%; }
+    .command-library-view.active { display: flex; flex-direction: column; }
+    .command-muted { color: var(--muted); font-size: 12px; }
+    .command-mono { font-family: Consolas, "Microsoft YaHei UI", monospace; }
+
+    .command-tabs, .task-tabs, .scrcpy-tabs {
+      display: flex;
+      flex: 0 0 auto;
+      border-bottom: 1px solid #b9c1c6;
+      background: #e8ecef;
+    }
+
+    .command-tab, .task-tab, .scrcpy-tab {
+      min-width: 132px;
+      min-height: 31px;
+      padding: 4px 14px;
+      border: 0;
+      border-right: 1px solid #c8cdd1;
+      border-top: 2px solid transparent;
+      background: #e2e7eb;
+      color: #616a70;
+      cursor: pointer;
+    }
+
+    .command-tab:hover, .task-tab:hover, .scrcpy-tab:hover { background: var(--blue-soft); }
+    .command-tab.active, .task-tab.active, .scrcpy-tab.active {
+      border-top-color: var(--blue);
+      background: #fafbfc;
+      color: #245a7a;
+      font-weight: 600;
+    }
+
+    .command-subview { display: none; flex: 1; min-height: 0; padding: 8px; }
+    .command-subview.active { display: flex; flex-direction: column; gap: 7px; }
+    .command-row { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; min-width: 0; }
+    .command-row .grow { flex: 1; min-width: 0; }
+    .command-row .text-input { height: 28px; }
+    .command-device { background: #f7f9fa; color: #4b565e; }
+    .command-row .command-category-filter { width: 135px; flex: 0 0 135px; }
+    .command-count { min-height: 16px; }
+    .command-table-wrap { flex: 1; min-height: 0; overflow: auto; border: 1px solid #bbc2c7; background: #fafbfc; }
+    .command-table { min-width: 690px; table-layout: fixed; }
+    .command-table th { position: sticky; top: 0; z-index: 1; background: #e0e5e9; color: #30383e; font-weight: 400; }
+    .command-table td, .command-table th { height: 29px; padding: 4px 7px; }
+    .command-table td { overflow: hidden; text-overflow: ellipsis; }
+    .command-table td.empty-row { height: 55px; text-align: center; color: var(--muted); }
+    .command-table .star-column { width: 48px; }
+    .command-table .name-column { width: 24%; }
+    .command-table .category-column { width: 85px; }
+    .command-table .mode-column { width: 85px; }
+    .command-table .status-column { width: 105px; }
+    .row-link, .star-button { padding: 0; border: 0; background: transparent; cursor: pointer; }
+    .row-link { text-align: left; color: inherit; }
+    .row-link:focus-visible, .star-button:focus-visible { outline: 1px solid var(--blue); }
+    .star-button { width: 28px; color: #86600a; font-size: 17px; }
+    .command-selection { min-height: 28px; }
+    .prototype-note { color: #8b650a; font-size: 12px; }
+
+    .command-editor-layout { display: grid; grid-template-columns: minmax(380px, 1.25fr) minmax(260px, .85fr); gap: 10px; overflow: auto; }
+    .command-editor-layout .panel { box-shadow: none; min-width: 0; }
+    .command-form { padding: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 9px 12px; }
+    .command-form label { display: block; color: #505b62; }
+    .command-form .full-row { grid-column: 1 / -1; }
+    .command-form input:not([type="checkbox"]), .command-form select, .command-form textarea,
+    .command-dialog select, .command-dialog input {
+      display: block; width: 100%; margin-top: 4px; padding: 5px 7px;
+      border: 1px solid #9e9e9e; border-radius: 0; background: #fff; font: inherit;
+    }
+    .command-form textarea { min-height: 110px; resize: vertical; font-family: Consolas, monospace; }
+    .command-code { margin: 0; padding: 10px; border: 1px solid #c8d0d4; background: #f3f6f8; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 Consolas, monospace; }
+    .command-preview-body { display: grid; gap: 10px; padding: 10px; }
+    .command-presets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; overflow: auto; }
+    .preset-card { border: 1px solid #bbc2c7; background: #fafbfc; padding: 10px; display: grid; gap: 8px; align-content: start; }
+    .preset-card strong { font-size: 14px; }
+    .preset-card .button { justify-self: start; }
+    .workflow-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 10px; min-height: 0; flex: 1; }
+    .workflow-list { border: 1px solid #bbc2c7; background: #fff; overflow: auto; padding: 4px; }
+    .workflow-item { display: block; width: 100%; padding: 8px; border: 0; background: transparent; text-align: left; cursor: pointer; }
+    .workflow-item.active { background: #cde6f7; }
+    .workflow-detail { display: flex; flex-direction: column; min-width: 0; gap: 8px; overflow: auto; }
+    .workflow-detail select { max-width: 240px; }
+
+    .task-dock { display: none; min-width: 0; min-height: 0; border-top: 5px solid #c6cdd2; background: #fafbfc; }
+    .command-workspace .task-dock { display: flex; flex-direction: column; }
+    .task-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 7px; padding: 7px 8px 8px; }
+    .task-table { min-width: 670px; }
+    .task-table .task-device-column { width: 130px; }
+    .task-table .task-state-column { width: 100px; }
+    .task-table .task-time-column { width: 80px; }
+    .task-table .task-exit-column { width: 70px; }
+    .task-table .task-action-column { width: 65px; }
+    .task-output-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(210px, .35fr); gap: 8px; min-height: 0; flex: 1; }
+    .task-output-stream { display: flex; flex-direction: column; min-height: 0; border: 1px solid #bbc2c7; }
+    .task-output-stream .stream-title { padding: 4px 8px; border-bottom: 1px solid #d0d5d8; background: #e9edef; }
+    .task-output { flex: 1; min-height: 0; margin: 0; overflow: auto; padding: 8px; background: #fff; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 Consolas, "Microsoft YaHei UI", monospace; }
+    .task-error { color: var(--danger); }
+    .command-dialog { width: 660px; max-width: calc(100vw - 32px); max-height: calc(100vh - 40px); overflow: auto; padding: 0; border: 1px solid #8f9ca5; box-shadow: 0 5px 24px #0004; }
+    .command-dialog::backdrop { background: #24374755; }
+    .command-dialog-body { display: grid; gap: 12px; padding: 12px; }
+    .command-dialog-actions { display: flex; justify-content: flex-end; gap: 7px; padding: 10px 12px; border-top: 1px solid #cbd0d4; }
+    .command-parameters { display: grid; gap: 8px; }
+
+    @media (max-width: 1080px) {
+      .command-tab { min-width: 110px; }
+      .command-editor-layout { grid-template-columns: 1fr; }
+      .workflow-layout { grid-template-columns: 180px minmax(0, 1fr); }
+      .command-selection { flex-wrap: wrap; }
+    }
+
+    .workspace.scrcpy-workspace { grid-template-rows: minmax(0, 1fr) 130px; }
+    .scrcpy-workspace .content-scroll { padding: 0; overflow: hidden; }
+    .scrcpy-view { display: none; height: 100%; min-height: 0; }
+    .scrcpy-view.active { display: flex; flex-direction: column; }
+    .scrcpy-toolbar { padding: 8px 10px; border-bottom: 1px solid #c7cdd1; background: #fafbfc; }
+    .scrcpy-toolbar .text-input { max-width: 370px; }
+    .scrcpy-subview { display: none; flex: 1; min-height: 0; overflow: auto; padding: 10px; }
+    .scrcpy-subview.active { display: block; }
+    .scrcpy-session-layout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
+    .scrcpy-view .panel { box-shadow: none; min-width: 0; }
+    .scrcpy-device-name { margin: 0 0 3px; font-size: 18px; font-weight: 600; }
+    .scrcpy-device-serial { color: #476173; font-family: Consolas, monospace; }
+    .scrcpy-status { padding: 2px 7px; border: 1px solid #c0c6ca; background: #e9edef; color: #616a70; font-size: 12px; font-weight: 400; }
+    .scrcpy-facts { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; margin: 10px 0 0; font-size: 12px; }
+    .scrcpy-facts dt { color: var(--muted); }
+    .scrcpy-facts dd { margin: 0; text-align: right; }
+    .scrcpy-profile-label { display: block; margin-bottom: 6px; color: #505b62; }
+    .scrcpy-profile-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .scrcpy-help { margin-top: 9px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .scrcpy-settings-layout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
+    .scrcpy-settings-layout .command-form { gap: 12px 14px; }
+    .scrcpy-checks { display: grid; gap: 12px; padding: 12px; }
+    .scrcpy-checks label { display: flex; gap: 8px; align-items: flex-start; color: #3b4851; }
+    .scrcpy-checks input { margin: 2px 0 0; }
+    .scrcpy-checks small { display: block; margin-top: 2px; color: var(--muted); }
+    .scrcpy-settings-note { padding: 0 12px 12px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+    .scrcpy-settings-layout fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+    .scrcpy-settings-layout fieldset:disabled { opacity: .5; }
+    .scrcpy-command-bar { flex: 0 0 auto; padding: 8px 10px; border-top: 1px solid #b9c1c6; background: #f5f7f8; }
+    .scrcpy-command-bar .command-code { margin-top: 5px; max-height: 90px; padding: 7px 9px; background: #fff; }
+    .scrcpy-command-note { color: #7b650f; font-size: 12px; }
+    .scrcpy-view .button:disabled { color: #999; border-color: #c7c7c7; background: #ededed; cursor: default; }
+
+    @media (max-width: 1080px) {
+      .scrcpy-session-layout { grid-template-columns: 1fr; }
+      .scrcpy-settings-layout { grid-template-columns: 1fr; }
+      .scrcpy-toolbar { flex-wrap: wrap; }
+    }
+
+    .button {
+      min-height: 28px;
+      padding: 0 11px;
+      border: 1px solid #9e9e9e;
+      border-radius: 0;
+      background: #f5f5f5;
+      cursor: pointer;
+    }
+
+    .button:hover { border-color: #5b9bd5; background: var(--blue-soft); }
+    .button:active { background: #cde6f7; border-color: #0078d4; }
+    .button:disabled { color: #999; border-color: #c7c7c7; background: #ededed; cursor: default; }
+
+    .button.primary {
+      border-color: var(--blue-dark);
+      background: var(--blue);
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .button.primary:hover { background: #348bc5; }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: minmax(295px, .78fr) minmax(480px, 1.5fr);
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .panel {
+      border: 1px solid #bcbcbc;
+      background: var(--panel-bg);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 34px;
+      padding: 7px 10px;
+      border-bottom: 1px solid #d0d0d0;
+      background: #f7f7f7;
+      font-weight: 600;
+    }
+
+    .panel-body { padding: 10px; }
+
+    .device-summary {
+      display: grid;
+      grid-template-columns: 54px minmax(0, 1fr);
+      gap: 10px;
+    }
+    .device-summary-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 11px;
+      padding-top: 9px;
+      border-top: 1px solid #e0e0e0;
+    }
+
+    .device-summary-actions .button {
+      min-height: 26px;
+      padding: 0 8px;
+      font-size: 12px;
+    }
+
+    .device-avatar {
+      display: grid;
+      place-items: center;
+      width: 54px;
+      height: 64px;
+      border: 1px solid #9db9c8;
+      background: #e5f2f9;
+      color: var(--blue-dark);
+      font-size: 25px;
+    }
+
+    .device-name { margin-top: 1px; font-size: 16px; font-weight: 600; }
+    .device-serial { margin-top: 2px; color: var(--muted); font-family: Consolas, monospace; }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 7px 12px;
+      margin-top: 12px;
+    }
+
+    .meta-label { color: #737b80; font-size: 11px; }
+    .meta-value { margin-top: 1px; font-family: Consolas, monospace; }
+
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 7px;
+      border: 1px solid #a9d2b7;
+      background: #eef8f0;
+      color: #237440;
+      font-size: 12px;
+    }
+
+    .status-chip::before {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      content: "";
+    }
+
+    .connection-grid {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: end;
+    }
+
+    .field-label { display: block; margin-bottom: 4px; color: #555e64; }
+
+    .text-input {
+      width: 100%;
+      height: 29px;
+      padding: 0 8px;
+      border: 1px solid #9e9e9e;
+      border-radius: 0;
+      outline: none;
+      background: #fff;
+    }
+
+    .text-input:focus { border-color: #0078d4; }
+
+    .connection-note {
+      margin-top: 11px;
+      padding-top: 9px;
+      border-top: 1px solid #e0e0e0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 12px 0 6px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .section-title small { color: var(--muted); font-size: 12px; font-weight: 400; }
+
+    .table-panel { overflow: hidden; }
+
+    .table-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 9px;
+      border-bottom: 1px solid #d0d0d0;
+      background: #f7f7f7;
+    }
+
+    .table-toolbar .toolbar-hint { flex: 1; color: var(--muted); }
+
+    .table-wrap {
+      min-height: 126px;
+      overflow-x: auto;
+      background: #fff;
+    }
+
+    table {
+      width: 100%;
+      min-width: 760px;
+      border-collapse: collapse;
+      background: #fff;
+    }
+
+    th, td {
+      height: 33px;
+      padding: 5px 9px;
+      border-right: 1px solid #d5dadd;
+      border-bottom: 1px solid #d5dadd;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    th {
+      background: #dcebf5;
+      color: #304554;
+      font-weight: 600;
+    }
+
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: #eef7fc; }
+    tbody tr.selected { background: #cde6f7; }
+    td.mono { font-family: Consolas, monospace; }
+    td.state { color: var(--green); font-weight: 600; }
+
+    .lower-grid {
+      display: grid;
+      grid-template-columns: minmax(380px, 1fr) minmax(390px, 1fr);
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .status-row,
+    .action-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .status-row + .status-row { margin-top: 9px; }
+    .status-label { width: 65px; color: var(--muted); }
+
+    .status-box {
+      padding: 5px 8px;
+      border: 1px solid #bdbdbd;
+      background: #eeeeee;
+      color: #555;
+      white-space: nowrap;
+    }
+
+    .action-panel .panel-body { min-height: 98px; }
+    .action-row + .action-row { margin-top: 8px; }
+    .action-row .button { flex: 0 0 auto; }
+
+    .log-dock {
+      display: grid;
+      grid-template-rows: 34px minmax(0, 1fr);
+      min-height: 0;
+      border-top: 1px solid #b7bdc1;
+      background: #f7f7f7;
+    }
+
+    .log-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 9px;
+      border-bottom: 1px solid #d0d0d0;
+      background: #eeeeee;
+    }
+
+    .log-title { font-weight: 600; }
+    .log-count { color: var(--muted); font-size: 12px; }
+    .log-header-spacer { flex: 1; }
+    .log-body { min-height: 0; padding: 6px 9px; }
+    .log-tools {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .log-filter {
+      height: 25px;
+      padding: 0 5px;
+      border: 1px solid #a7a7a7;
+      border-radius: 0;
+      background: #fff;
+      color: var(--text);
+    }
+
+    .auto-scroll-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+    }
+
+    .log-line[data-hidden="true"] { display: none; }
+
+    .log-output {
+      width: 100%;
+      height: 100%;
+      overflow: auto;
+      padding: 5px 7px;
+      border: 1px solid #9e9e9e;
+      outline: 0;
+      background: var(--log-bg);
+      color: #4f565b;
+      font: 12px/1.55 Consolas, "Microsoft YaHei UI", monospace;
+      white-space: pre-wrap;
+    }
+
+    .log-line { display: block; }
+    .log-line.ok { color: #267443; }
+    .log-line.info { color: #4f565b; }
+    .log-line.warn { color: var(--warning); }
+    .context-menu {
+      position: fixed;
+      z-index: 10;
+      display: none;
+      min-width: 154px;
+      padding: 3px 0;
+      border: 1px solid #9e9e9e;
+      background: #fff;
+      box-shadow: 0 2px 7px rgba(0, 0, 0, .2);
+    }
+
+    .context-menu.visible { display: block; }
+
+    .context-menu button {
+      display: block;
+      width: 100%;
+      padding: 6px 12px;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .context-menu button:hover { background: var(--blue-soft); }
+
+    .workspace.log-collapsed:not(.command-workspace) { grid-template-rows: minmax(0, 1fr) 34px; }
+    .workspace.log-collapsed .log-body { display: none; }
+    .workspace.log-collapsed .log-header { border-bottom: 0; }
+
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 9px;
+      border-top: 1px solid #bdbdbd;
+      background: #e9edef;
+      color: #50575c;
+      font-size: 12px;
+    }
+
+    .status-bar-spacer { flex: 1; }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 42px;
+      display: none;
+      padding: 8px 12px;
+      border: 1px solid #86aac1;
+      background: #eff8fd;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, .16);
+    }
+
+    .toast.visible { display: block; }
+
+    @media (max-width: 1220px) {
+      .app-shell { min-width: 900px; }
+      .main-layout { grid-template-columns: 188px minmax(0, 1fr); }
+      .brand { width: 174px; flex-basis: 174px; }
+      .summary-grid, .lower-grid { grid-template-columns: 1fr; }
+      .command-row { flex-wrap: wrap; }
+    }
+
+    @media (max-width: 980px) {
+      .tool-button .tool-label { display: inline; margin-left: 5px; }
+      .tool-button { min-width: auto; }
+      .toolbar > .tool-button:nth-of-type(n + 4) { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <div class="menu-bar" role="menubar" aria-label="应用菜单">
+      <button class="menu-item">文件(F)</button>
+      <button class="menu-item">设备(D)</button>
+      <button class="menu-item">视图(V)</button>
+      <button class="menu-item">工具(T)</button>
+      <button class="menu-item">帮助(H)</button>
+      <div class="menu-page-context" aria-live="polite">
+        <h1 class="menu-page-title" id="pageTitle">ADB 设备主页</h1>
+        <span class="menu-page-description" id="pageDescription">连接、刷新并选择当前 ADB 设备；选择结果同步到顶部全局上下文。</span>
+      </div>
+      <div class="menu-page-actions">
+        <button class="button" data-action="refresh">刷新设备</button>
+        <button class="button primary" data-action="terminal">打开 ADB 终端</button>
+      </div>
+    </div>
+
+    <div class="toolbar" aria-label="主工具栏">
+      <div class="brand"><span class="brand-mark">›_</span><span>Android Toolbox</span></div>
+      <span class="toolbar-separator"></span>
+      <button class="tool-button" data-action="refresh" title="刷新设备">↻<span class="tool-label">刷新</span></button>
+      <button class="tool-button" data-action="terminal" title="ADB 终端">▣<span class="tool-label">终端</span></button>
+      <button class="tool-button" data-action="logcat" title="实时 Logcat">≋<span class="tool-label">Logcat</span></button>
+      <button class="tool-button" data-action="scrcpy" title="Scrcpy">▤<span class="tool-label">Scrcpy</span></button>
+      <span class="toolbar-separator"></span>
+      <select id="deviceSelect" class="device-select" aria-label="当前 ADB 设备">
+        <option value="86de45c0">ADB 设备 · 86de45c0</option>
+        <option value="emulator-5554">ADB 设备 · emulator-5554</option>
+      </select>
+      <span class="toolbar-spacer"></span>
+      <button class="connection-state" id="connectionState">设备已连接</button>
+      <button class="icon-button" title="关于">ⓘ</button>
+      <button class="icon-button" title="更多">⋮</button>
+    </div>
+
+    <div class="main-layout">
+      <aside class="sidebar" aria-label="功能导航">
+        <div class="sidebar-title">功能</div>
+        <div class="nav-section">
+          <div class="nav-section-title">设备</div>
+          <button class="nav-item active" data-page="ADB 设备主页"><span class="nav-icon">▣</span>ADB 设备主页</button>
+          <button class="nav-item" data-page="ADB 命令库"><span class="nav-icon">›_</span>ADB 命令库</button>
+          <button class="nav-item" data-page="Scrcpy"><span class="nav-icon">▤</span>Scrcpy</button>
+        </div>
+        <div class="nav-section">
+          <div class="nav-section-title">日志</div>
+          <button class="nav-item" data-page="实时 Logcat"><span class="nav-icon">≋</span>实时 Logcat</button>
+          <button class="nav-item" data-page="抓 Log / 日志开关"><span class="nav-icon">⇩</span>抓 Log / 日志开关</button>
+          <button class="nav-item" data-page="ADB 原始输出"><span class="nav-icon">▤</span>ADB 原始输出</button>
+        </div>
+        <div class="nav-section">
+          <div class="nav-section-title">系统</div>
+          <button class="nav-item" data-page="系统属性（Prop）"><span class="nav-icon">≡</span>系统属性（Prop）</button>
+          <button class="nav-item" data-page="Android Settings"><span class="nav-icon">⚙</span>Android Settings</button>
+          <button class="nav-item" data-page="Proto 系统信息"><span class="nav-icon">▦</span>Proto 系统信息</button>
+        </div>
+        <div class="nav-section">
+          <div class="nav-section-title">性能</div>
+          <button class="nav-item" data-page="Perfetto Trace"><span class="nav-icon">⌁</span>Perfetto Trace</button>
+          <button class="nav-item" data-page="进程管理"><span class="nav-icon">▥</span>进程管理</button>
+        </div>
+        <div class="nav-section">
+          <div class="nav-section-title">应用与分析</div>
+          <button class="nav-item" data-page="Package 管理"><span class="nav-icon">▧</span>Package 管理</button>
+          <button class="nav-item" data-page="窗口问题分析"><span class="nav-icon">□</span>窗口问题分析</button>
+        </div>
+      </aside>
+
+      <section class="workspace" id="workspace">
+        <main class="content-scroll">
+          <div id="homeView" class="home-view">
+
+          <div class="summary-grid">
+            <section class="panel">
+              <div class="panel-header"><span>当前设备</span><span class="status-chip">device</span></div>
+              <div class="panel-body">
+                <div class="device-summary">
+                  <div class="device-avatar">▣</div>
+                  <div>
+                    <div class="device-name">PJF110</div>
+                    <div class="device-serial" id="currentSerial">86de45c0</div>
+                  </div>
+                </div>
+                <div class="meta-grid">
+                  <div><div class="meta-label">Product</div><div class="meta-value">PJF110</div></div>
+                  <div><div class="meta-label">Device</div><div class="meta-value">OP5CFBL1</div></div>
+                  <div><div class="meta-label">Transport</div><div class="meta-value">USB · 2</div></div>
+                  <div><div class="meta-label">Android</div><div class="meta-value">未检测</div></div>
+                </div>
+                <div class="device-summary-actions">
+                  <button class="button" data-action="refresh">刷新</button>
+                  <button class="button" data-log="[ADB] root">ADB Root</button>
+                  <button class="button" data-action="connect">无线连接</button>
+                  <button class="button primary" data-action="terminal">打开终端</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header"><span>ADB 连接</span><span style="color:#616a70;font-size:12px;font-weight:400">全局连接上下文</span></div>
+              <div class="panel-body">
+                <div class="connection-grid">
+                  <label>
+                    <span class="field-label">无线 ADB 地址</span>
+                    <input id="addressInput" class="text-input" placeholder="例如 192.168.1.10:5555">
+                  </label>
+                  <button class="button primary" id="connectButton">连接</button>
+                </div>
+                <div class="connection-note">当前连接：<strong id="connectionType">USB</strong>　·　ADB Server：运行中　·　上次刷新：<span id="lastRefresh">刚刚</span></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="section-title"><span>设备列表</span><small>双击设备设为当前上下文</small></div>
+          <section class="panel table-panel">
+            <div class="table-toolbar">
+              <span class="toolbar-hint" id="deviceHint">已发现 1 台设备</span>
+              <button class="button" data-action="copy">复制 Serial</button>
+              <button class="button" data-action="select">设为当前设备</button>
+              <button class="button" data-action="refresh">刷新</button>
+            </div>
+            <div class="table-wrap">
+              <table aria-label="ADB 设备列表">
+                <thead>
+                  <tr><th>Serial</th><th>State</th><th>Model</th><th>Product</th><th>Device</th><th>Transport</th></tr>
+                </thead>
+                <tbody id="deviceRows">
+                  <tr class="selected" data-serial="86de45c0"><td class="mono">86de45c0</td><td class="state">device</td><td>PJF110</td><td>PJF110</td><td>OP5CFBL1</td><td>2</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <div class="lower-grid">
+            <section class="panel">
+              <div class="panel-header"><span>ADB 特权状态</span><span style="color:#616a70;font-size:12px;font-weight:400">按当前设备检测</span></div>
+              <div class="panel-body">
+                <div class="status-row">
+                  <span class="status-label">当前状态</span>
+                  <span class="status-box">Root：未检测</span>
+                  <span class="status-box">Remount：未检测</span>
+                  <span class="status-box">Debuggable：未检测</span>
+                </div>
+                <div class="status-row">
+                  <span class="status-label">操作</span>
+                  <button class="button" data-log="[ADB] get-state：86de45c0 → device">获取状态</button>
+                  <button class="button" data-log="[ADB] root">ADB Root</button>
+                  <button class="button" disabled>ADB Remount</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel action-panel">
+              <div class="panel-header"><span>快捷操作</span><span style="color:#616a70;font-size:12px;font-weight:400">高频工具</span></div>
+              <div class="panel-body">
+                <div class="action-row">
+                  <button class="button primary" data-action="refresh">获取 ADB 设备</button>
+                  <button class="button" data-action="connect">连接无线 ADB</button>
+                  <button class="button" data-log="[ADB] disconnect 86de45c0">断开设备</button>
+                </div>
+                <div class="action-row">
+                  <button class="button" data-log="[ADB] start-server">启动 ADB Server</button>
+                  <button class="button" data-log="[ADB] kill-server && start-server">重启 ADB Server</button>
+                  <button class="button" data-log="[ADB] version：Android Debug Bridge 1.0.41">ADB 版本</button>
+                </div>
+              </div>
+            </section>
+          </div>
+          </div>
+
+          <div id="commandLibraryView" class="command-library-view">
+            <div class="command-tabs" role="tablist" aria-label="ADB 命令库子界面">
+              <button id="tabLibrary" class="command-tab active" data-command-tab="library" role="tab" aria-controls="viewLibrary" aria-selected="true">命令库</button>
+              <button id="tabEditor" class="command-tab" data-command-tab="editor" role="tab" aria-controls="viewEditor" aria-selected="false" tabindex="-1">创建/编辑命令</button>
+              <button id="tabPresets" class="command-tab" data-command-tab="presets" role="tab" aria-controls="viewPresets" aria-selected="false" tabindex="-1">预置命令</button>
+              <button id="tabWorkflows" class="command-tab" data-command-tab="workflows" role="tab" aria-controls="viewWorkflows" aria-selected="false" tabindex="-1">工作流</button>
+              <button id="tabHistory" class="command-tab" data-command-tab="history" role="tab" aria-controls="viewHistory" aria-selected="false" tabindex="-1">执行历史</button>
+            </div>
+
+            <section id="viewLibrary" class="command-subview active" data-command-view="library" role="tabpanel" aria-labelledby="tabLibrary">
+              <div class="command-row">
+                <label for="libraryDevice">当前设备</label>
+                <input id="libraryDevice" class="text-input command-device command-mono grow" value="86de45c0" readonly>
+                <button id="runSelectedCommand" class="button" disabled>执行所选</button>
+                <button id="manageCommands" class="button" aria-pressed="false">管理命令</button>
+                <button id="quickCommand" class="button">快速执行 Ctrl+K</button>
+              </div>
+              <div class="command-row">
+                <input id="commandSearch" class="text-input grow" placeholder="搜索可执行命令的名称、描述、标签或命令" aria-label="搜索命令">
+                <select id="commandCategoryFilter" class="text-input command-category-filter" aria-label="命令分类"><option value="">全部分类</option><option>设备</option><option>Shell</option><option>应用</option><option>系统</option><option>文件</option></select>
+              </div>
+              <div class="command-row command-count"><span id="commandCount" class="command-muted grow" aria-live="polite"></span><span class="prototype-note">界面原型 · 不连接真实 ADB</span></div>
+              <div class="command-table-wrap">
+                <table class="command-table" aria-label="ADB 命令库">
+                  <thead><tr><th class="star-column">收藏</th><th class="name-column">名称</th><th class="category-column">分类</th><th class="mode-column">模式</th><th>命令摘要</th><th class="status-column">最近状态</th></tr></thead>
+                  <tbody id="commandRows"></tbody>
+                </table>
+              </div>
+              <div class="command-row command-selection"><span id="commandSelection" class="command-muted grow">选择命令后可执行；双击名称打开参数预览。</span><button id="newCommandButton" class="button">新建命令</button><button id="editCommandButton" class="button" disabled>编辑所选</button></div>
+              <div id="commandManagement" class="command-row" hidden><span class="command-muted grow">管理模式：复制或删除所选命令。</span><button id="duplicateCommand" class="button" disabled>复制命令</button><button id="deleteCommand" class="button" disabled>删除命令</button></div>
+            </section>
+
+            <section id="viewEditor" class="command-subview" data-command-view="editor" role="tabpanel" aria-labelledby="tabEditor">
+              <div class="command-row"><strong id="editorState" class="grow">创建命令</strong><button id="editorNewCommand" class="button">新建命令</button><span class="command-muted">保存到当前浏览会话</span></div>
+              <div class="command-editor-layout">
+                <form id="commandForm" class="panel">
+                  <div class="panel-header">命令定义</div>
+                  <div class="command-form">
+                    <label>名称<input id="commandName" required maxlength="100" placeholder="例如：读取 Android 版本"></label>
+                    <label>分类<select id="commandCategory"><option>设备</option><option>Shell</option><option>应用</option><option>系统</option><option>文件</option></select></label>
+                    <label class="full-row">命令模板<textarea id="commandTemplate" required placeholder="adb shell getprop {key}"></textarea></label>
+                    <label class="full-row">描述<input id="commandDescription" placeholder="说明命令用途和注意事项"></label>
+                    <label>标签<input id="commandTags" placeholder="以逗号分隔，例如：调试, 属性"></label>
+                    <label>模式<select id="commandScope"><option value="device">设备命令（指定 Serial）</option><option value="host">ADB Server 命令</option></select></label>
+                    <label>超时（秒）<input id="commandTimeout" type="number" value="10" min="1" max="3600" required></label>
+                    <label>权限<select id="commandPermission"><option value="user">普通用户</option><option value="root">需要 Root</option></select></label>
+                    <label class="full-row"><input id="commandFavorite" type="checkbox"> 收藏此命令</label>
+                  </div>
+                  <div class="command-row panel-body"><span class="grow"></span><button id="cancelCommandEdit" type="button" class="button">取消</button><button type="submit" class="button primary">保存命令</button></div>
+                </form>
+                <section class="panel">
+                  <div class="panel-header">模板预览与参数</div>
+                  <div class="command-preview-body"><pre id="commandEditorPreview" class="command-code">输入命令模板后显示预览。</pre><div id="editorVariables" class="command-muted">未定义参数。</div><div class="command-muted">以 {变量名} 定义参数，执行前逐项填写。设备命令会使用顶部选中的 Serial；Server 命令不添加 -s。</div><div id="editorPermissionNote" class="prototype-note">此处仅编辑模板，不执行任何命令。</div></div>
+                </section>
+              </div>
+            </section>
+
+            <section id="viewPresets" class="command-subview" data-command-view="presets" role="tabpanel" aria-labelledby="tabPresets">
+              <div class="command-row"><strong class="grow">常用预置命令</strong><span class="command-muted">添加到命令库后可编辑和执行预览</span></div>
+              <div id="presetCommands" class="command-presets"></div>
+            </section>
+
+            <section id="viewWorkflows" class="command-subview" data-command-view="workflows" role="tabpanel" aria-labelledby="tabWorkflows">
+              <div class="command-row"><strong class="grow">工作流</strong><button id="newWorkflow" class="button">新建工作流</button><span class="prototype-note">按步骤生成命令预览，不实际执行</span></div>
+              <div class="workflow-layout">
+                <div id="workflowList" class="workflow-list" aria-label="工作流列表"></div>
+                <div class="workflow-detail">
+                  <label>工作流名称<input id="workflowName" class="text-input" placeholder="例如：设备信息检查"></label>
+                  <div class="command-row"><select id="workflowCommand" class="text-input grow" aria-label="添加工作流命令"></select><button id="addWorkflowStep" class="button">添加步骤</button></div>
+                  <div class="command-table-wrap"><table class="command-table" aria-label="工作流步骤"><thead><tr><th style="width:50px">顺序</th><th style="width:25%">命令</th><th>模板</th><th style="width:145px">操作</th></tr></thead><tbody id="workflowSteps"></tbody></table></div>
+                  <div class="command-row"><span class="grow"></span><button id="deleteWorkflow" class="button" disabled>删除工作流</button><button id="saveWorkflow" class="button">保存工作流</button><button id="previewWorkflow" class="button primary">预览工作流</button></div>
+                </div>
+              </div>
+            </section>
+
+            <section id="viewHistory" class="command-subview" data-command-view="history" role="tabpanel" aria-labelledby="tabHistory">
+              <div class="command-row"><strong class="grow">执行历史</strong><span class="prototype-note">本原型只记录明确标注的演示任务</span></div>
+              <div class="command-table-wrap"><table class="command-table" aria-label="命令执行历史"><thead><tr><th style="width:100px">时间</th><th>命令</th><th style="width:150px">设备</th><th style="width:115px">状态</th><th style="width:80px">退出码</th><th style="width:90px">输出</th></tr></thead><tbody id="commandHistory"></tbody></table></div>
+            </section>
+          </div>
+
+          <form id="scrcpyView" class="scrcpy-view" novalidate>
+            <div class="scrcpy-tabs" role="tablist" aria-label="Scrcpy 子界面">
+              <button id="scrcpyTabSession" type="button" class="scrcpy-tab active" data-scrcpy-tab="session" role="tab" aria-controls="scrcpySession" aria-selected="true">投屏会话</button>
+              <button id="scrcpyTabMedia" type="button" class="scrcpy-tab" data-scrcpy-tab="media" role="tab" aria-controls="scrcpyMedia" aria-selected="false" tabindex="-1">视频与音频</button>
+              <button id="scrcpyTabControl" type="button" class="scrcpy-tab" data-scrcpy-tab="control" role="tab" aria-controls="scrcpyControl" aria-selected="false" tabindex="-1">控制与录制</button>
+            </div>
+            <div class="command-row scrcpy-toolbar">
+              <label for="scrcpyDevice">当前设备</label><input id="scrcpyDevice" class="text-input command-device command-mono grow" value="86de45c0" readonly>
+              <span class="grow"></span><span class="scrcpy-status">界面原型 · 未接入 Scrcpy</span>
+              <button type="button" class="button primary" disabled title="HTML 原型未接入 Scrcpy 进程">启动独立窗口</button>
+              <button type="button" class="button" disabled title="没有运行中的 Scrcpy 会话">停止</button>
+              <button id="scrcpyReset" type="button" class="button">恢复默认</button>
+            </div>
+
+            <section id="scrcpySession" class="scrcpy-subview active" data-scrcpy-view="session" role="tabpanel" aria-labelledby="scrcpyTabSession">
+              <div class="scrcpy-settings-note">投屏画面在 Scrcpy 独立窗口中显示，本工具仅管理启动配置，不内嵌设备画面。</div>
+              <div class="scrcpy-session-layout">
+                  <section class="panel">
+                    <div class="panel-header"><span>目标设备</span><span class="scrcpy-status">全局上下文</span></div>
+                    <div class="panel-body"><div id="scrcpyDeviceModel" class="scrcpy-device-name">PJF110</div><div id="scrcpyDeviceSerial" class="scrcpy-device-serial">86de45c0</div>
+                      <dl class="scrcpy-facts"><dt>设备信息</dt><dd>沿用主页示例</dd><dt>Scrcpy 程序</dt><dd>未检查</dd><dt>会话状态</dt><dd>未运行</dd><dt>录制状态</dt><dd>未开始</dd></dl>
+                    </div>
+                  </section>
+                  <section class="panel">
+                    <div class="panel-header">快捷配置</div>
+                    <div class="panel-body"><label class="scrcpy-profile-label" for="scrcpyProfile">画质方案</label><select id="scrcpyProfile" class="text-input"><option value="balanced">均衡 · 最长边 1080</option><option value="smooth">流畅 · 最长边 720</option><option value="quality">高清 · 最长边 1920</option><option value="custom">自定义配置</option></select>
+                      <dl class="scrcpy-facts"><dt>最长边限制</dt><dd id="scrcpySizeSummary">1080 px</dd><dt>帧率上限</dt><dd id="scrcpyFpsSummary">60 FPS</dd><dt>视频码率</dt><dd id="scrcpyBitrateSummary">8 Mbps</dd><dt>音频转发</dt><dd id="scrcpyAudioSummary">已启用</dd><dt>设备控制</dt><dd id="scrcpyControlSummary">已启用</dd></dl>
+                      <div class="scrcpy-profile-actions"><button type="button" class="button" data-scrcpy-open="media">视频与音频设置</button><button type="button" class="button" data-scrcpy-open="control">控制与录制设置</button></div>
+                      <div class="scrcpy-help">方案是启动参数预设，不代表实测画质或延迟。配置修改会立即更新下方命令。</div>
+                    </div>
+                  </section>
+              </div>
+            </section>
+
+            <section id="scrcpyMedia" class="scrcpy-subview" data-scrcpy-view="media" role="tabpanel" aria-labelledby="scrcpyTabMedia">
+              <div class="scrcpy-settings-layout">
+                <section class="panel"><div class="panel-header"><span>视频参数</span><span class="command-muted">启动时应用</span></div>
+                  <div class="command-form">
+                    <label>最长边限制<select id="scrcpyMaxSize" class="scrcpy-profile-setting"><option value="0">原始尺寸（不限制）</option><option value="720">720 px</option><option value="1080" selected>1080 px</option><option value="1280">1280 px</option><option value="1920">1920 px</option></select></label>
+                    <label>帧率上限<select id="scrcpyMaxFps" class="scrcpy-profile-setting"><option value="0">不限制</option><option value="30">30 FPS</option><option value="60" selected>60 FPS</option><option value="90">90 FPS</option><option value="120">120 FPS</option></select></label>
+                    <label>视频码率（Mbps）<input id="scrcpyVideoBitrate" class="scrcpy-profile-setting" type="number" min="1" max="100" value="8" required></label>
+                    <label>视频编码<select id="scrcpyVideoCodec" class="scrcpy-profile-setting"><option value="h264">H.264（兼容性优先）</option><option value="h265">H.265</option><option value="av1">AV1</option></select></label>
+                    <label>视频缓冲（毫秒）<input id="scrcpyVideoBuffer" class="scrcpy-profile-setting" type="number" min="0" max="2000" step="10" value="0" required></label>
+                    <label>显示方向<select id="scrcpyOrientation"><option value="0">默认方向</option><option value="90">旋转 90°</option><option value="180">旋转 180°</option><option value="270">旋转 270°</option></select></label>
+                  </div>
+                  <div class="scrcpy-settings-note">最长边限制保留设备画面比例。H.265 / AV1 是否可用取决于设备编码器；缓冲越大，画面延迟也越大。</div>
+                </section>
+                <section class="panel"><div class="panel-header">音频转发</div>
+                  <div class="scrcpy-checks"><label><input id="scrcpyAudioEnabled" class="scrcpy-profile-setting" type="checkbox" checked><span>转发设备音频<small>关闭时生成 --no-audio。</small></span></label></div>
+                  <fieldset id="scrcpyAudioSettings"><div class="command-form">
+                    <label class="full-row">音频来源<select id="scrcpyAudioSource"><option value="output">设备输出（设备端停止播放）</option><option value="mic">设备麦克风</option></select></label>
+                    <label>音频码率（Kbps）<input id="scrcpyAudioBitrate" type="number" min="32" max="512" step="32" value="128" required></label>
+                    <label>音频缓冲（毫秒）<input id="scrcpyAudioBuffer" type="number" min="10" max="1000" step="10" value="50" required></label>
+                  </div></fieldset>
+                  <div class="scrcpy-settings-note">设备音频转发需要 Android 11 或更新系统；Android 11 启动时需解锁屏幕。麦克风来源会捕获设备周围的声音，请注意隐私。</div>
+                </section>
+              </div>
+            </section>
+
+            <section id="scrcpyControl" class="scrcpy-subview" data-scrcpy-view="control" role="tabpanel" aria-labelledby="scrcpyTabControl">
+              <div class="scrcpy-settings-layout">
+                <section class="panel"><div class="panel-header">设备控制与窗口</div>
+                  <fieldset id="scrcpyControlSettings"><div class="scrcpy-checks">
+                    <label><input id="scrcpyControlEnabled" type="checkbox" checked><span>允许键盘和鼠标控制<small>关闭后以只读方式投屏。</small></span></label>
+                    <label><input id="scrcpyClipboardSync" type="checkbox" checked><span>自动同步剪贴板<small>设备剪贴板会同步到电脑，避免复制敏感内容。</small></span></label>
+                  </div></fieldset>
+                  <fieldset id="scrcpyWindowSettings"><div class="scrcpy-checks">
+                    <label><input id="scrcpyAlwaysOnTop" type="checkbox"><span>窗口置顶</span></label>
+                    <label><input id="scrcpyFullscreen" type="checkbox"><span>以全屏模式启动</span></label>
+                    <label><input id="scrcpyBorderless" type="checkbox"><span>隐藏窗口边框</span></label>
+                  </div></fieldset>
+                  <div class="scrcpy-settings-note">这些选项修改下一次启动命令，不会改变运行中的窗口。本原型没有控制或剪贴板同步通道。</div>
+                </section>
+                <section class="panel"><div class="panel-header"><span>录制设置</span><span class="command-muted">与投屏一同启动</span></div>
+                  <div class="scrcpy-checks"><label><input id="scrcpyRecordEnabled" type="checkbox"><span>启动时录制<small>在电脑上保存视频；不是设备端录屏。</small></span></label></div>
+                  <fieldset id="scrcpyRecordSettings" disabled><div class="command-form">
+                    <label class="full-row">输出文件<input id="scrcpyRecordPath" value="scrcpy-recording.mp4" placeholder="例如 D:\Recordings\screen.mp4" required></label>
+                    <label>封装格式<select id="scrcpyRecordFormat"><option value="mp4">MP4</option><option value="mkv">MKV</option></select></label>
+                    <label>录制模式<select id="scrcpyRecordMode"><option value="mirror">投屏并录制</option><option value="only">仅录制（不显示窗口）</option></select></label>
+                  </div></fieldset>
+                  <div class="scrcpy-settings-note">录制文件名可以包含空格。复制命令后须自行确认路径可写；HTML 页面不会创建文件，也不会检查或覆盖现有文件。</div>
+                </section>
+              </div>
+            </section>
+
+            <div class="scrcpy-command-bar"><div class="command-row"><strong>启动命令 · PowerShell</strong><span id="scrcpyCommandNote" class="scrcpy-command-note grow">仅预览，未执行任何程序。</span><button id="copyScrcpyCommand" type="button" class="button">复制启动命令</button></div><pre id="scrcpyCommandPreview" class="command-code"></pre></div>
+          </form>
+        </main>
+
+        <section class="log-dock" id="logDock">
+          <div class="log-header">
+            <span class="log-title">活动日志</span>
+            <span class="log-count" id="logCount">6 条记录</span>
+            <div class="log-tools">
+              <label for="logFilter">级别</label>
+              <select id="logFilter" class="log-filter" aria-label="日志级别筛选">
+                <option value="all">全部</option>
+                <option value="ok">OK</option>
+                <option value="info">INFO</option>
+                <option value="warn">WARN</option>
+              </select>
+              <label class="auto-scroll-label"><input id="autoScroll" type="checkbox" checked> 自动滚动</label>
+            </div>
+            <span class="log-header-spacer"></span>
+            <button class="icon-button" id="clearLog" title="清空日志">清空</button>
+            <button class="icon-button" id="toggleLog" title="展开或收起日志">收起</button>
+          </div>
+          <div class="log-body">
+            <div class="log-output" id="logOutput" role="log" aria-live="polite">
+              <span class="log-line ok" data-level="ok">[OK] Android Toolbox UI 已启动</span>
+              <span class="log-line info" data-level="info">[INFO] 当前设备上下文：86de45c0</span>
+              <span class="log-line info" data-level="info">[ADB] devices -l</span>
+              <span class="log-line ok" data-level="ok">[OK] 获取到 1 台设备：86de45c0 state=device</span>
+              <span class="log-line info" data-level="info">[VIEW] 当前页面：ADB 设备主页</span>
+              <span class="log-line info" data-level="info">[INFO] 等待设备操作</span>
+            </div>
+          </div>
+        </section>
+
+        <section id="taskDock" class="task-dock" aria-label="命令任务面板">
+          <div class="task-tabs" role="tablist" aria-label="任务面板标签">
+            <button id="tabTasks" class="task-tab active" data-task-tab="tasks" role="tab" aria-controls="panelTasks" aria-selected="true">活动任务</button>
+            <button id="tabOutput" class="task-tab" data-task-tab="output" role="tab" aria-controls="panelOutput" aria-selected="false" tabindex="-1">任务输出</button>
+          </div>
+          <div id="panelTasks" class="task-panel" role="tabpanel" aria-labelledby="tabTasks">
+            <div class="command-row"><span class="command-muted grow">选择任务查看输出。停止、强制结束控件在接入真实进程后可用。</span><button id="viewTaskOutput" class="button" disabled>查看所选输出</button><button id="clearFinishedTasks" class="button" disabled>清除已结束</button></div>
+            <div class="command-table-wrap"><table class="command-table task-table" aria-label="活动任务"><thead><tr><th>命令</th><th class="task-device-column">设备</th><th class="task-state-column">状态</th><th class="task-time-column">已运行</th><th class="task-exit-column">退出码</th><th class="task-action-column">操作</th></tr></thead><tbody id="taskRows"></tbody></table></div>
+          </div>
+          <div id="panelOutput" class="task-panel" role="tabpanel" aria-labelledby="tabOutput" hidden>
+            <div class="command-row"><span id="taskOutputInfo" class="command-muted grow">选择活动任务或历史记录后查看输出。</span><button class="button" disabled title="界面原型没有运行中的 ADB 进程">停止</button><button class="button" disabled title="界面原型没有运行中的 ADB 进程">强制结束</button><button id="copyTaskOutput" class="button" disabled>复制输出</button></div>
+            <div class="task-output-wrap"><div class="task-output-stream"><div class="stream-title">标准输出 · stdout</div><pre id="taskStdout" class="task-output"></pre></div><div class="task-output-stream"><div class="stream-title">错误输出 · stderr</div><pre id="taskStderr" class="task-output task-error"></pre></div></div>
+          </div>
+        </section>
+      </section>
+    </div>
+
+    <footer class="status-bar">
+      <span id="statusText">设备已连接</span>
+      <span class="status-bar-spacer"></span>
+      <span>ADB: <strong id="statusSerial">86de45c0</strong></span>
+      <span>v0.1.0 · 布局原型</span>
+    </footer>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+  <div class="context-menu" id="deviceContextMenu" role="menu">
+    <button type="button" data-context-action="copy">复制 Serial</button>
+    <button type="button" data-context-action="select">设为当前设备</button>
+    <button type="button" data-context-action="disconnect">断开设备</button>
+  </div>
+
+  <dialog id="executionDialog" class="command-dialog" aria-labelledby="executionTitle">
+    <div class="panel-header"><span id="executionTitle">执行命令 · 参数预览</span><button id="closeExecutionDialog" class="icon-button" aria-label="关闭执行预览">关闭</button></div>
+    <div class="command-dialog-body">
+      <div class="prototype-note">HTML 界面原型，不调用 ADB。可生成演示任务检查任务列表与输出布局。</div>
+      <label>选择命令<select id="executionCommand"></select></label>
+      <div class="command-row"><span>当前设备</span><strong id="executionDevice" class="command-mono"></strong><span id="executionSettings" class="command-muted"></span></div>
+      <div id="executionParameters" class="command-parameters"></div>
+      <pre id="executionPreview" class="command-code"></pre>
+    </div>
+    <div class="command-dialog-actions"><button class="button" disabled title="当前为静态 HTML 原型，未接入 ADB 后端">执行命令（未接入 ADB）</button><button id="createDemoTask" class="button primary">生成演示任务</button></div>
+  </dialog>
+  <dialog id="workflowPreviewDialog" class="command-dialog" aria-labelledby="workflowPreviewTitle">
+    <div class="panel-header"><span id="workflowPreviewTitle">工作流预览</span><button id="closeWorkflowPreview" class="icon-button">关闭</button></div>
+    <div class="command-dialog-body"><div class="prototype-note">顺序预览，不执行 ADB。带参数的步骤仍需填写参数。</div><pre id="workflowPreviewContent" class="command-code"></pre></div>
+  </dialog>
+
+  <script>
+    const workspace = document.getElementById('workspace');
+    const logOutput = document.getElementById('logOutput');
+    const logCount = document.getElementById('logCount');
+    const logFilter = document.getElementById('logFilter');
+    const autoScroll = document.getElementById('autoScroll');
+    const toast = document.getElementById('toast');
+    const contextMenu = document.getElementById('deviceContextMenu');
+    let logLines = logOutput.querySelectorAll('.log-line').length;
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('visible');
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(() => toast.classList.remove('visible'), 1800);
+    }
+
+    function applyLogFilter() {
+      const filter = logFilter.value;
+      logOutput.querySelectorAll('.log-line').forEach(line => {
+        line.dataset.hidden = filter !== 'all' && line.dataset.level !== filter ? 'true' : 'false';
+      });
+    }
+
+    function addLog(message, type = 'info') {
+      const line = document.createElement('span');
+      line.className = `log-line ${type}`;
+      line.dataset.level = type;
+      const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      line.textContent = `[${time}] ${message}`;
+      logOutput.appendChild(line);
+      logLines += 1;
+      logCount.textContent = `${logLines} 条记录`;
+      applyLogFilter();
+      if (autoScroll.checked) logOutput.scrollTop = logOutput.scrollHeight;
+    }
+
+    function selectedRow() {
+      return document.querySelector('#deviceRows tr.selected');
+    }
+
+    function selectedSerial() {
+      return selectedRow()?.dataset.serial || document.getElementById('currentSerial').textContent;
+    }
+
+    function setCurrentDevice(row = selectedRow(), announce = true) {
+      if (!row) return;
+      document.querySelectorAll('#deviceRows tr').forEach(item => item.classList.remove('selected'));
+      row.classList.add('selected');
+      const serial = row.dataset.serial;
+      document.getElementById('currentSerial').textContent = serial;
+      document.getElementById('statusSerial').textContent = serial;
+      document.getElementById('deviceSelect').value = serial;
+      syncCommandDevice();
+      syncScrcpyDevice();
+      if (announce) addLog(`[OK] 已选择设备：${serial} state=device`, 'ok');
+    }
+
+    function refreshDevices() {
+      document.getElementById('lastRefresh').textContent = '刚刚';
+      document.getElementById('deviceHint').textContent = '已发现 1 台设备';
+      addLog('[ADB] devices -l');
+      addLog('[OK] 获取到 1 台设备：86de45c0 state=device', 'ok');
+      showToast('设备列表已刷新');
+    }
+
+    function connectWireless() {
+      const address = document.getElementById('addressInput').value.trim();
+      if (!address) {
+        addLog('[WARN] 请输入无线 ADB 地址后再连接', 'warn');
+        document.getElementById('addressInput').focus();
+        showToast('需要输入无线 ADB 地址');
+        return;
+      }
+      document.getElementById('connectionType').textContent = '无线';
+      addLog(`[ADB] connect ${address}`);
+      addLog('[INFO] UI 已提交无线连接请求，等待 ADB 服务响应');
+      showToast('已提交无线连接请求');
+    }
+
+    function copySelectedSerial() {
+      const serial = selectedSerial();
+      const copy = navigator.clipboard?.writeText(serial) || Promise.resolve();
+      copy.then(() => showToast(`已复制 Serial：${serial}`));
+      addLog(`[INFO] 已复制 Serial：${serial}`);
+    }
+
+    function handleAction(action) {
+      if (action === 'refresh') return refreshDevices();
+      if (action === 'connect') return connectWireless();
+      if (action === 'copy') return copySelectedSerial();
+      if (action === 'select') return setCurrentDevice();
+      if (action === 'scrcpy') return document.querySelector('.nav-item[data-page="Scrcpy"]').click();
+      if (action === 'terminal') {
+        addLog('[INFO] 已请求打开 ADB 终端');
+        showToast('ADB 终端入口已准备');
+        return;
+      }
+      addLog(`[VIEW] 已打开：${action}`);
+      showToast(`${action} 页面已选中`);
+    }
+
+    document.querySelectorAll('[data-action]').forEach(button => {
+      button.addEventListener('click', () => handleAction(button.dataset.action));
+    });
+
+    document.querySelectorAll('[data-log]').forEach(button => {
+      button.addEventListener('click', () => addLog(button.dataset.log));
+    });
+
+    const commandUI = id => document.getElementById(id);
+    const commandDefinitions = new Map([
+      { id: 'devices', name: '查看设备列表', category: '设备', template: 'adb devices -l', scope: 'host', description: '查看 ADB Server 发现的设备及连接信息。', tags: '设备,连接', favorite: true },
+      { id: 'shell', name: '执行 Shell 命令', category: 'Shell', template: 'adb shell {command}', scope: 'device', description: '在当前设备上执行 Shell 命令。', tags: '调试' },
+      { id: 'packages', name: '列出第三方应用', category: '应用', template: 'adb shell pm list packages -3', scope: 'device', description: '列出用户安装的应用包名。', tags: '包名,应用' },
+      { id: 'props', name: '读取系统属性', category: '系统', template: 'adb shell getprop {key}', scope: 'device', description: '读取指定的 Android 系统属性。', tags: '属性,调试' },
+      { id: 'screenshot', name: '截取屏幕', category: '文件', template: 'adb shell screencap -p {path}', scope: 'device', description: '将截图保存到设备上的指定路径。', tags: '截图' }
+    ].map(command => [command.id, { timeout: 10, permission: 'user', favorite: false, ...command }]));
+    const presetDefinitions = [
+      { name: 'Android 版本', category: '系统', template: 'adb shell getprop ro.build.version.release', description: '读取系统版本号。', tags: '版本' },
+      { name: '屏幕分辨率', category: '设备', template: 'adb shell wm size', description: '查看物理和覆盖的屏幕尺寸。', tags: '屏幕' },
+      { name: '存储空间', category: '文件', template: 'adb shell df -h /data', description: '检查用户数据分区的可用空间。', tags: '存储' },
+      { name: '最近 100 条日志', category: '系统', template: 'adb logcat -d -t 100', description: '输出日志快照后退出，不持续监听。', tags: '日志' }
+    ];
+    const commandHistory = [];
+    let activeTasks = [];
+    let selectedCommandId = null;
+    let editingCommandId = null;
+    let selectedTaskId = null;
+    const workflows = new Map([['device-info', { name: '设备信息检查', steps: ['devices', 'props'] }]]);
+    let editingWorkflowId = null;
+    let workflowDraft = { name: '', steps: [] };
+
+    function appendCell(row, text, className = '') {
+      const cell = row.insertCell();
+      cell.textContent = text;
+      cell.className = className;
+      cell.title = text;
+      return cell;
+    }
+
+    function commandButton(label, action, className = 'button') {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = className;
+      button.textContent = label;
+      button.addEventListener('click', action);
+      return button;
+    }
+
+    function emptyCommandTable(body, columns, message) {
+      const cell = body.insertRow().insertCell();
+      cell.colSpan = columns;
+      cell.className = 'empty-row';
+      cell.textContent = message;
+    }
+
+    function setCommandView(view) {
+      document.querySelectorAll('[data-command-tab]').forEach(tab => {
+        const active = tab.dataset.commandTab === view;
+        tab.classList.toggle('active', active);
+        tab.setAttribute('aria-selected', String(active));
+        tab.tabIndex = active ? 0 : -1;
+      });
+      document.querySelectorAll('[data-command-view]').forEach(panel => panel.classList.toggle('active', panel.dataset.commandView === view));
+    }
+
+    function setTaskView(view) {
+      document.querySelectorAll('[data-task-tab]').forEach(tab => {
+        const active = tab.dataset.taskTab === view;
+        tab.classList.toggle('active', active);
+        tab.setAttribute('aria-selected', String(active));
+        tab.tabIndex = active ? 0 : -1;
+      });
+      commandUI('panelTasks').hidden = view !== 'tasks';
+      commandUI('panelOutput').hidden = view !== 'output';
+    }
+
+    function setPage(page) {
+      const commandMode = page === 'ADB 命令库';
+      const scrcpyMode = page === 'Scrcpy';
+      commandUI('homeView').hidden = commandMode || scrcpyMode;
+      commandUI('commandLibraryView').classList.toggle('active', commandMode);
+      commandUI('scrcpyView').classList.toggle('active', scrcpyMode);
+      workspace.classList.toggle('command-workspace', commandMode);
+      workspace.classList.toggle('scrcpy-workspace', scrcpyMode);
+      if (commandMode) { syncCommandDevice(); renderCommandLibrary(); }
+      if (scrcpyMode) syncScrcpyDevice();
+    }
+
+    function syncCommandDevice() {
+      const serial = commandUI('deviceSelect').value;
+      commandUI('libraryDevice').value = serial || '未选择设备';
+      commandUI('executionDevice').textContent = serial || '未选择设备';
+      if (commandUI('executionDialog').open) renderExecutionPreview();
+    }
+
+    function selectCommand(id) {
+      selectedCommandId = id;
+      const command = commandDefinitions.get(id);
+      commandUI('commandSelection').textContent = command ? `${command.name} · ${command.description || '无描述'} · 超时 ${command.timeout} 秒` : '选择命令后可执行；双击名称打开参数预览。';
+      ['runSelectedCommand', 'editCommandButton', 'duplicateCommand', 'deleteCommand'].forEach(key => commandUI(key).disabled = !command);
+      document.querySelectorAll('#commandRows tr[data-command-id]').forEach(row => {
+        const active = row.dataset.commandId === id;
+        row.classList.toggle('selected', active);
+        row.setAttribute('aria-selected', String(active));
+      });
+    }
+
+    function renderCommandLibrary() {
+      const query = commandUI('commandSearch').value.trim().toLowerCase();
+      const category = commandUI('commandCategoryFilter').value;
+      const commands = [...commandDefinitions.values()].filter(command => (!category || command.category === category) && `${command.name} ${command.description} ${command.tags} ${command.template}`.toLowerCase().includes(query));
+      if (!commands.some(command => command.id === selectedCommandId)) selectedCommandId = null;
+      const body = commandUI('commandRows');
+      body.replaceChildren();
+      commands.forEach(command => {
+        const row = body.insertRow();
+        row.dataset.commandId = command.id;
+        const star = commandButton(command.favorite ? '★' : '☆', event => {
+          event.stopPropagation();
+          command.favorite = !command.favorite;
+          renderCommandLibrary();
+        }, 'star-button');
+        star.setAttribute('aria-label', `${command.favorite ? '取消收藏' : '收藏'} ${command.name}`);
+        star.setAttribute('aria-pressed', String(command.favorite));
+        row.insertCell().append(star);
+        row.insertCell().append(commandButton(command.name, () => selectCommand(command.id), 'row-link'));
+        appendCell(row, command.category);
+        appendCell(row, command.scope === 'host' ? 'Server' : '设备');
+        appendCell(row, command.template, 'command-mono');
+        appendCell(row, commandHistory.some(task => task.commandId === command.id) ? '演示完成' : '未执行');
+        row.addEventListener('click', () => selectCommand(command.id));
+        row.addEventListener('dblclick', event => { if (!event.target.closest('.star-button')) openExecution(command.id); });
+      });
+      if (!commands.length) emptyCommandTable(body, 6, commandDefinitions.size ? '没有匹配的命令，请调整搜索或分类。' : '命令库为空，可创建命令或添加预置命令。');
+      commandUI('commandCount').textContent = `显示 ${commands.length} / ${commandDefinitions.size} 条可执行命令`;
+      selectCommand(selectedCommandId);
+    }
+
+    function variableNames(template) {
+      return [...new Set([...template.matchAll(/\{([^{}\s]+)\}/g)].map(match => match[1]))];
+    }
+
+    function finalCommand(command, parameters = {}) {
+      let text = command.template.replace(/\{([^{}\s]+)\}/g, (match, name) => parameters[name] || match);
+      if (command.scope === 'device') text = text.replace(/^adb(?:\s+|$)/, () => `adb -s ${commandUI('deviceSelect').value} `);
+      return text;
+    }
+
+    function updateEditorPreview() {
+      const template = commandUI('commandTemplate').value;
+      commandUI('commandEditorPreview').textContent = template || '输入命令模板后显示预览。';
+      const variables = variableNames(template);
+      commandUI('editorVariables').textContent = variables.length ? `执行前填写：${variables.join('、')}` : '此模板不包含参数。';
+      commandUI('editorPermissionNote').textContent = commandUI('commandPermission').value === 'root' ? '需要 Root：真实执行前需检查设备权限。本原型不执行命令。' : '此处仅编辑模板，不执行任何命令。';
+    }
+
+    function editCommand(id = null) {
+      editingCommandId = id;
+      const command = commandDefinitions.get(id);
+      commandUI('commandForm').reset();
+      commandUI('editorState').textContent = command ? `编辑命令：${command.name}` : '创建命令';
+      if (command) {
+        const fields = { commandName: 'name', commandCategory: 'category', commandTemplate: 'template', commandDescription: 'description', commandTags: 'tags', commandScope: 'scope', commandTimeout: 'timeout', commandPermission: 'permission' };
+        Object.entries(fields).forEach(([field, key]) => commandUI(field).value = command[key]);
+        commandUI('commandFavorite').checked = command.favorite;
+      }
+      updateEditorPreview();
+      setCommandView('editor');
+      commandUI('commandName').focus();
+    }
+
+    function renderCommandOptions(select, selected = select.value) {
+      select.replaceChildren();
+      commandDefinitions.forEach(command => select.add(new Option(command.name, command.id)));
+      if (commandDefinitions.has(selected)) select.value = selected;
+    }
+
+    function openExecution(id = selectedCommandId) {
+      if (!commandDefinitions.size) { showToast('请先创建命令或添加预置命令'); return; }
+      renderCommandOptions(commandUI('executionCommand'), id);
+      renderExecutionParameters();
+      syncCommandDevice();
+      commandUI('executionDialog').showModal();
+      renderExecutionPreview();
+    }
+
+    function renderExecutionParameters() {
+      const command = commandDefinitions.get(commandUI('executionCommand').value);
+      const container = commandUI('executionParameters');
+      container.replaceChildren();
+      variableNames(command.template).forEach(name => {
+        const label = document.createElement('label');
+        label.textContent = name;
+        const field = document.createElement('input');
+        field.dataset.parameter = name;
+        field.placeholder = `填写 ${name}`;
+        field.required = true;
+        field.addEventListener('input', renderExecutionPreview);
+        label.append(field);
+        container.append(label);
+      });
+      if (!container.children.length) container.textContent = '此命令无需填写参数。';
+      renderExecutionPreview();
+    }
+
+    function renderExecutionPreview() {
+      const command = commandDefinitions.get(commandUI('executionCommand').value);
+      if (!command) return;
+      const fields = [...document.querySelectorAll('#executionParameters input')];
+      const parameters = Object.fromEntries(fields.map(field => [field.dataset.parameter, field.value.trim()]));
+      commandUI('executionPreview').textContent = finalCommand(command, parameters);
+      commandUI('executionSettings').textContent = `${command.scope === 'host' ? 'Server 命令，不指定设备' : '设备命令'} · 超时 ${command.timeout} 秒 · ${command.permission === 'root' ? '需要 Root' : '普通用户'}`;
+      commandUI('createDemoTask').disabled = fields.some(field => !field.value.trim()) || (command.scope === 'device' && !commandUI('deviceSelect').value);
+    }
+
+    function createDemoTask() {
+      const command = commandDefinitions.get(commandUI('executionCommand').value);
+      const serial = command.scope === 'host' ? 'ADB Server' : commandUI('deviceSelect').value;
+      const task = {
+        id: crypto.randomUUID(), commandId: command.id, command: commandUI('executionPreview').textContent,
+        device: serial, time: new Date().toLocaleTimeString('zh-CN', { hour12: false }), status: '演示完成',
+        stdout: '[界面演示数据，不是 ADB 返回结果]\n此任务用于展示命令、设备、状态与输出的关联。\n未启动 ADB 进程，未改变任何设备状态。',
+        stderr: ''
+      };
+      activeTasks.push(task);
+      commandHistory.unshift(task);
+      selectedTaskId = task.id;
+      commandUI('executionDialog').close();
+      renderTasks(); renderHistory(); renderCommandLibrary();
+      setTaskView('tasks');
+      addLog(`[DEMO] 已生成界面演示任务：${task.command}`);
+      showToast('已生成演示任务，未执行 ADB');
+    }
+
+    function selectTask(id, output = false) {
+      selectedTaskId = id;
+      renderTasks();
+      if (output) setTaskView('output');
+    }
+
+    function renderTasks() {
+      const body = commandUI('taskRows');
+      body.replaceChildren();
+      activeTasks.forEach(task => {
+        const row = body.insertRow();
+        row.classList.toggle('selected', task.id === selectedTaskId);
+        appendCell(row, task.command, 'command-mono'); appendCell(row, task.device, 'command-mono');
+        appendCell(row, task.status); appendCell(row, '—'); appendCell(row, '—');
+        row.insertCell().append(commandButton('输出', () => selectTask(task.id, true), 'row-link'));
+        row.addEventListener('click', () => { if (selectedTaskId !== task.id) selectTask(task.id); });
+        row.addEventListener('dblclick', () => selectTask(task.id, true));
+      });
+      if (!activeTasks.length) emptyCommandTable(body, 6, '暂无活动任务。执行预览中可生成明确标注的演示任务。');
+      const task = commandHistory.find(record => record.id === selectedTaskId);
+      commandUI('viewTaskOutput').disabled = !task;
+      commandUI('clearFinishedTasks').disabled = !activeTasks.length;
+      commandUI('copyTaskOutput').disabled = !task;
+      commandUI('taskOutputInfo').textContent = task ? `${task.command} · ${task.device} · ${task.status}（无真实耗时/退出码）` : '选择活动任务或历史记录后查看输出。';
+      commandUI('taskStdout').textContent = task?.stdout || '';
+      commandUI('taskStderr').textContent = task?.stderr || '';
+    }
+
+    function renderHistory() {
+      const body = commandUI('commandHistory');
+      body.replaceChildren();
+      commandHistory.forEach(task => {
+        const row = body.insertRow();
+        appendCell(row, task.time); appendCell(row, task.command, 'command-mono'); appendCell(row, task.device);
+        appendCell(row, task.status); appendCell(row, '—');
+        row.insertCell().append(commandButton('查看输出', () => selectTask(task.id, true), 'row-link'));
+      });
+      if (!commandHistory.length) emptyCommandTable(body, 6, '暂无执行历史。演示任务会记录在这里，清除任务不删除历史。');
+    }
+
+    function renderPresets() {
+      const container = commandUI('presetCommands');
+      presetDefinitions.forEach(preset => {
+        const card = document.createElement('section');
+        card.className = 'preset-card';
+        const title = document.createElement('strong'); title.textContent = preset.name;
+        const description = document.createElement('span'); description.textContent = `${preset.category} · ${preset.description}`; description.className = 'command-muted';
+        const code = document.createElement('pre'); code.textContent = preset.template; code.className = 'command-code';
+        const button = commandButton('添加到命令库', () => {
+          const id = crypto.randomUUID();
+          commandDefinitions.set(id, { ...preset, id, scope: 'device', timeout: 10, permission: 'user', favorite: false });
+          commandUI('commandSearch').value = ''; commandUI('commandCategoryFilter').value = '';
+          selectedCommandId = id; renderCommandLibrary(); renderCommandOptions(commandUI('workflowCommand'));
+          setCommandView('library'); showToast(`已添加：${preset.name}`);
+        });
+        card.append(title, description, code, button); container.append(card);
+      });
+    }
+
+    function renderWorkflows() {
+      const container = commandUI('workflowList'); container.replaceChildren();
+      workflows.forEach((workflow, id) => {
+        const item = commandButton(`${workflow.name} · ${workflow.steps.length} 步`, () => {
+          editingWorkflowId = id; workflowDraft = { name: workflow.name, steps: [...workflow.steps] };
+          commandUI('workflowName').value = workflowDraft.name; renderWorkflows(); renderWorkflowSteps();
+        }, 'workflow-item');
+        item.classList.toggle('active', id === editingWorkflowId); container.append(item);
+      });
+      if (!workflows.size) container.textContent = '暂无保存的工作流';
+      commandUI('deleteWorkflow').disabled = !editingWorkflowId;
+    }
+
+    function renderWorkflowSteps() {
+      const body = commandUI('workflowSteps'); body.replaceChildren();
+      workflowDraft.steps.forEach((id, index) => {
+        const command = commandDefinitions.get(id);
+        const row = body.insertRow();
+        appendCell(row, String(index + 1)); appendCell(row, command.name); appendCell(row, command.template, 'command-mono');
+        const actions = row.insertCell();
+        const move = direction => {
+          const destination = index + direction;
+          [workflowDraft.steps[index], workflowDraft.steps[destination]] = [workflowDraft.steps[destination], workflowDraft.steps[index]];
+          renderWorkflowSteps();
+        };
+        const up = commandButton('上移', () => move(-1), 'row-link'); up.disabled = index === 0;
+        const down = commandButton('下移', () => move(1), 'row-link'); down.disabled = index === workflowDraft.steps.length - 1;
+        actions.append(up, ' / ', down, ' / ', commandButton('移除', () => { workflowDraft.steps.splice(index, 1); renderWorkflowSteps(); }, 'row-link'));
+      });
+      if (!workflowDraft.steps.length) emptyCommandTable(body, 4, '从命令库选择命令，添加为工作流步骤。');
+      commandUI('previewWorkflow').disabled = !workflowDraft.steps.length;
+      commandUI('addWorkflowStep').disabled = !commandDefinitions.size;
+    }
+
+    document.querySelectorAll('[data-command-tab]').forEach(tab => tab.addEventListener('click', () => setCommandView(tab.dataset.commandTab)));
+    document.querySelectorAll('[data-task-tab]').forEach(tab => tab.addEventListener('click', () => setTaskView(tab.dataset.taskTab)));
+    document.querySelectorAll('.command-tabs, .task-tabs, .scrcpy-tabs').forEach(tablist => tablist.addEventListener('keydown', event => {
+      const tabs = [...tablist.querySelectorAll('[role="tab"]')];
+      const index = tabs.indexOf(event.target);
+      if (index < 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+      tabs[next].click(); tabs[next].focus();
+    }));
+    commandUI('commandSearch').addEventListener('input', renderCommandLibrary);
+    commandUI('commandCategoryFilter').addEventListener('change', renderCommandLibrary);
+    commandUI('manageCommands').addEventListener('click', () => {
+      const active = commandUI('commandManagement').hidden;
+      commandUI('commandManagement').hidden = !active;
+      commandUI('manageCommands').setAttribute('aria-pressed', String(active));
+    });
+    ['newCommandButton', 'editorNewCommand'].forEach(id => commandUI(id).addEventListener('click', () => editCommand()));
+    commandUI('editCommandButton').addEventListener('click', () => editCommand(selectedCommandId));
+    commandUI('commandTemplate').addEventListener('input', updateEditorPreview);
+    commandUI('commandPermission').addEventListener('change', updateEditorPreview);
+    commandUI('commandForm').addEventListener('submit', event => {
+      event.preventDefault();
+      const name = commandUI('commandName').value.trim(), template = commandUI('commandTemplate').value.trim();
+      if (!name || !template) { showToast('名称和命令模板不能为空'); return; }
+      const id = editingCommandId || crypto.randomUUID();
+      commandDefinitions.set(id, { id, name, template, category: commandUI('commandCategory').value, description: commandUI('commandDescription').value.trim(), tags: commandUI('commandTags').value.trim(), scope: commandUI('commandScope').value, timeout: Number(commandUI('commandTimeout').value), permission: commandUI('commandPermission').value, favorite: commandUI('commandFavorite').checked });
+      selectedCommandId = id; editingCommandId = id;
+      commandUI('commandSearch').value = ''; commandUI('commandCategoryFilter').value = '';
+      renderCommandLibrary(); renderCommandOptions(commandUI('workflowCommand')); setCommandView('library');
+      showToast(`已保存到当前会话：${name}`);
+    });
+    commandUI('cancelCommandEdit').addEventListener('click', () => { editCommand(editingCommandId); setCommandView('library'); });
+    commandUI('duplicateCommand').addEventListener('click', () => {
+      const command = commandDefinitions.get(selectedCommandId), id = crypto.randomUUID();
+      commandDefinitions.set(id, { ...command, id, name: `${command.name} 副本` }); selectedCommandId = id;
+      renderCommandLibrary(); renderCommandOptions(commandUI('workflowCommand'));
+    });
+    commandUI('deleteCommand').addEventListener('click', () => {
+      const command = commandDefinitions.get(selectedCommandId);
+      if (!window.confirm(`删除“${command.name}”？引用它的工作流步骤也会移除。`)) return;
+      commandDefinitions.delete(selectedCommandId);
+      workflows.forEach(workflow => workflow.steps = workflow.steps.filter(id => id !== selectedCommandId));
+      workflowDraft.steps = workflowDraft.steps.filter(id => id !== selectedCommandId);
+      if (editingCommandId === selectedCommandId) editCommand();
+      selectedCommandId = null; renderCommandLibrary(); renderCommandOptions(commandUI('workflowCommand')); renderWorkflows(); renderWorkflowSteps();
+    });
+    commandUI('runSelectedCommand').addEventListener('click', () => openExecution());
+    commandUI('quickCommand').addEventListener('click', () => openExecution());
+    document.addEventListener('keydown', event => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && workspace.classList.contains('command-workspace') && !document.querySelector('dialog[open]')) { event.preventDefault(); openExecution(); }
+    });
+    commandUI('executionCommand').addEventListener('change', renderExecutionParameters);
+    commandUI('closeExecutionDialog').addEventListener('click', () => commandUI('executionDialog').close());
+    commandUI('createDemoTask').addEventListener('click', createDemoTask);
+    commandUI('viewTaskOutput').addEventListener('click', () => setTaskView('output'));
+    commandUI('clearFinishedTasks').addEventListener('click', () => { activeTasks = []; selectedTaskId = null; renderTasks(); });
+    commandUI('copyTaskOutput').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(`stdout:\n${commandUI('taskStdout').textContent}\nstderr:\n${commandUI('taskStderr').textContent}`); showToast('任务输出已复制'); }
+      catch { showToast('浏览器未授权剪贴板，请手动选择输出复制'); }
+    });
+    commandUI('newWorkflow').addEventListener('click', () => {
+      editingWorkflowId = null; workflowDraft = { name: '', steps: [] }; commandUI('workflowName').value = ''; renderWorkflows(); renderWorkflowSteps(); commandUI('workflowName').focus();
+    });
+    commandUI('addWorkflowStep').addEventListener('click', () => { workflowDraft.steps.push(commandUI('workflowCommand').value); renderWorkflowSteps(); });
+    commandUI('saveWorkflow').addEventListener('click', () => {
+      const name = commandUI('workflowName').value.trim();
+      if (!name || !workflowDraft.steps.length) { showToast('填写工作流名称并添加至少一个步骤'); return; }
+      editingWorkflowId ||= crypto.randomUUID(); workflows.set(editingWorkflowId, { name, steps: [...workflowDraft.steps] }); renderWorkflows(); showToast('工作流已保存到当前会话');
+    });
+    commandUI('deleteWorkflow').addEventListener('click', () => {
+      workflows.delete(editingWorkflowId); commandUI('newWorkflow').click();
+    });
+    commandUI('previewWorkflow').addEventListener('click', () => {
+      commandUI('workflowPreviewContent').textContent = workflowDraft.steps.map((id, index) => `${index + 1}. ${commandDefinitions.get(id).name}\n   ${finalCommand(commandDefinitions.get(id))}`).join('\n\n');
+      commandUI('workflowPreviewDialog').showModal();
+    });
+    commandUI('closeWorkflowPreview').addEventListener('click', () => commandUI('workflowPreviewDialog').close());
+    renderCommandLibrary(); renderPresets(); renderTasks(); renderHistory(); renderWorkflows(); renderWorkflowSteps();
+    renderCommandOptions(commandUI('workflowCommand')); syncCommandDevice();
+
+    function setScrcpyView(view) {
+      document.querySelectorAll('[data-scrcpy-tab]').forEach(tab => {
+        const active = tab.dataset.scrcpyTab === view;
+        tab.classList.toggle('active', active);
+        tab.setAttribute('aria-selected', String(active));
+        tab.tabIndex = active ? 0 : -1;
+      });
+      document.querySelectorAll('[data-scrcpy-view]').forEach(panel => panel.classList.toggle('active', panel.dataset.scrcpyView === view));
+    }
+
+    function syncScrcpyDevice() {
+      const serial = commandUI('deviceSelect').value;
+      const row = [...document.querySelectorAll('#deviceRows tr')].find(device => device.dataset.serial === serial);
+      commandUI('scrcpyDevice').value = serial || '未选择设备';
+      commandUI('scrcpyDeviceSerial').textContent = serial || '未选择设备';
+      commandUI('scrcpyDeviceModel').textContent = row ? row.cells[2].textContent : '型号未检测';
+      renderScrcpyCommand();
+    }
+
+    function renderScrcpyCommand() {
+      const form = commandUI('scrcpyView');
+      const serial = commandUI('deviceSelect').value;
+      const recording = commandUI('scrcpyRecordEnabled').checked;
+      const recordOnly = recording && commandUI('scrcpyRecordMode').value === 'only';
+      const audio = commandUI('scrcpyAudioEnabled').checked;
+      const control = commandUI('scrcpyControlEnabled').checked && !recordOnly;
+      commandUI('scrcpyAudioSettings').disabled = !audio;
+      commandUI('scrcpyRecordSettings').disabled = !recording;
+      commandUI('scrcpyControlSettings').disabled = recordOnly;
+      commandUI('scrcpyWindowSettings').disabled = recordOnly;
+      commandUI('scrcpyClipboardSync').disabled = !control;
+
+      const size = commandUI('scrcpyMaxSize').value;
+      const fps = commandUI('scrcpyMaxFps').value;
+      const bitrate = commandUI('scrcpyVideoBitrate').value;
+      const orientation = commandUI('scrcpyOrientation').value;
+      commandUI('scrcpySizeSummary').textContent = size === '0' ? '不限制' : `${size} px`;
+      commandUI('scrcpyFpsSummary').textContent = fps === '0' ? '不限制' : `${fps} FPS`;
+      commandUI('scrcpyBitrateSummary').textContent = bitrate ? `${bitrate} Mbps` : '未填写';
+      commandUI('scrcpyAudioSummary').textContent = audio ? (commandUI('scrcpyAudioSource').value === 'mic' ? '麦克风' : '设备输出') : '已关闭';
+      commandUI('scrcpyControlSummary').textContent = control ? '已启用' : '只读 / 不控制';
+
+      const invalid = [...form.querySelectorAll('input')].find(input => input.willValidate && !input.checkValidity());
+      const emptyRecordPath = recording && !commandUI('scrcpyRecordPath').value.trim();
+      commandUI('copyScrcpyCommand').disabled = !serial || !!invalid || emptyRecordPath;
+      if (!serial || invalid || emptyRecordPath) {
+        const message = !serial ? '请先在顶部选择设备。' : emptyRecordPath ? '启用录制后需要填写输出文件。' : `请检查“${invalid.closest('label').childNodes[0].textContent.trim()}”的取值。`;
+        commandUI('scrcpyCommandPreview').textContent = message;
+        commandUI('scrcpyCommandNote').textContent = '配置未完成，暂不能复制启动命令。';
+        return;
+      }
+
+      const quote = value => `'${value.replace(/'/g, "''")}'`;
+      const args = [`--serial=${quote(serial)}`];
+      if (size !== '0') args.push(`--max-size=${size}`);
+      if (fps !== '0') args.push(`--max-fps=${fps}`);
+      args.push(`--video-bit-rate=${bitrate}M`, `--video-codec=${commandUI('scrcpyVideoCodec').value}`);
+      if (Number(commandUI('scrcpyVideoBuffer').value)) args.push(`--video-buffer=${commandUI('scrcpyVideoBuffer').value}`);
+      if (orientation !== '0') args.push(`--orientation=${orientation}`);
+      if (audio) {
+        args.push(`--audio-source=${commandUI('scrcpyAudioSource').value}`, `--audio-bit-rate=${commandUI('scrcpyAudioBitrate').value}K`, `--audio-buffer=${commandUI('scrcpyAudioBuffer').value}`);
+      } else args.push('--no-audio');
+      if (recordOnly) {
+        args.push('--no-playback', '--no-window');
+      } else {
+        if (!control) args.push('--no-control');
+        if (control && !commandUI('scrcpyClipboardSync').checked) args.push('--no-clipboard-autosync');
+        [['scrcpyAlwaysOnTop', '--always-on-top'], ['scrcpyFullscreen', '--fullscreen'], ['scrcpyBorderless', '--window-borderless']].forEach(([id, flag]) => { if (commandUI(id).checked) args.push(flag); });
+      }
+      if (recording) args.push(`--record=${quote(commandUI('scrcpyRecordPath').value.trim())}`, `--record-format=${commandUI('scrcpyRecordFormat').value}`);
+      commandUI('scrcpyCommandPreview').textContent = `scrcpy ${args.join(' ')}`;
+      commandUI('scrcpyCommandNote').textContent = '仅预览，需本机安装 Scrcpy；未执行任何程序。';
+    }
+
+    function applyScrcpyProfile() {
+      const profile = commandUI('scrcpyProfile').value;
+      const profiles = {
+        balanced: { size: '1080', fps: '60', bitrate: '8', audio: true },
+        smooth: { size: '720', fps: '60', bitrate: '4', audio: false },
+        quality: { size: '1920', fps: '60', bitrate: '16', audio: true }
+      };
+      const config = profiles[profile];
+      if (config) {
+        commandUI('scrcpyMaxSize').value = config.size;
+        commandUI('scrcpyMaxFps').value = config.fps;
+        commandUI('scrcpyVideoBitrate').value = config.bitrate;
+        commandUI('scrcpyVideoCodec').value = 'h264';
+        commandUI('scrcpyVideoBuffer').value = '0';
+        commandUI('scrcpyAudioEnabled').checked = config.audio;
+      }
+      renderScrcpyCommand();
+    }
+
+    document.querySelectorAll('[data-scrcpy-tab]').forEach(tab => tab.addEventListener('click', () => setScrcpyView(tab.dataset.scrcpyTab)));
+    document.querySelectorAll('[data-scrcpy-open]').forEach(button => button.addEventListener('click', () => setScrcpyView(button.dataset.scrcpyOpen)));
+    commandUI('scrcpyView').addEventListener('submit', event => event.preventDefault());
+    commandUI('scrcpyView').addEventListener('input', event => {
+      if (event.target.classList.contains('scrcpy-profile-setting')) commandUI('scrcpyProfile').value = 'custom';
+      renderScrcpyCommand();
+    });
+    commandUI('scrcpyView').addEventListener('change', event => {
+      if (event.target.id === 'scrcpyProfile') { applyScrcpyProfile(); return; }
+      if (event.target.id === 'scrcpyRecordFormat') {
+        const path = commandUI('scrcpyRecordPath');
+        if (path.value.trim()) path.value = path.value.replace(/\.(mp4|mkv)$/i, '') + `.${event.target.value}`;
+      }
+      renderScrcpyCommand();
+    });
+    commandUI('scrcpyReset').addEventListener('click', () => { commandUI('scrcpyView').reset(); syncScrcpyDevice(); showToast('Scrcpy 配置已恢复默认，未执行程序'); });
+    commandUI('copyScrcpyCommand').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(commandUI('scrcpyCommandPreview').textContent); showToast('已复制 PowerShell 启动命令，未执行'); }
+      catch { showToast('浏览器未授权剪贴板，请手动选择命令复制'); }
+    });
+    syncScrcpyDevice();
+
+    document.querySelectorAll('.nav-item').forEach(item => {
+      item.addEventListener('click', () => {
+        document.querySelectorAll('.nav-item').forEach(nav => nav.classList.remove('active'));
+        item.classList.add('active');
+        const page = item.dataset.page;
+        document.getElementById('pageTitle').textContent = page;
+        document.getElementById('pageDescription').textContent = page === 'ADB 设备主页'
+          ? '连接、刷新并选择当前 ADB 设备；选择结果同步到顶部全局上下文。'
+          : page === 'ADB 命令库'
+            ? '管理已保存命令、运行参数与工作流；在下方查看活动任务和任务输出。'
+            : page === 'Scrcpy'
+              ? '配置设备投屏、音频转发与录制，预览 Scrcpy 启动参数。'
+              : `${page} 已接入主导航，后续可在此放置专用工具面板。`;
+        setPage(page);
+        addLog(`[VIEW] 已打开：${page}`);
+      });
+    });
+
+    document.querySelectorAll('#deviceRows tr').forEach(row => {
+      row.addEventListener('click', () => setCurrentDevice(row));
+      row.addEventListener('dblclick', () => {
+        setCurrentDevice(row, false);
+        addLog(`[OK] 已将设备设为当前上下文：${row.dataset.serial}`, 'ok');
+        showToast('已设为当前设备');
+      });
+      row.addEventListener('contextmenu', event => {
+        event.preventDefault();
+        setCurrentDevice(row, false);
+        contextMenu.style.left = `${Math.min(event.clientX, window.innerWidth - 174)}px`;
+        contextMenu.style.top = `${Math.min(event.clientY, window.innerHeight - 128)}px`;
+        contextMenu.classList.add('visible');
+      });
+    });
+
+    document.querySelectorAll('[data-context-action]').forEach(button => {
+      button.addEventListener('click', () => {
+        const action = button.dataset.contextAction;
+        contextMenu.classList.remove('visible');
+        if (action === 'copy') return copySelectedSerial();
+        if (action === 'select') return handleAction('select');
+        addLog(`[ADB] disconnect ${selectedSerial()}`);
+        showToast('已提交断开设备请求');
+      });
+    });
+
+    document.addEventListener('click', event => {
+      if (!event.target.closest('#deviceContextMenu')) contextMenu.classList.remove('visible');
+    });
+
+    document.getElementById('deviceSelect').addEventListener('change', event => {
+      const serial = event.target.value;
+      document.getElementById('currentSerial').textContent = serial;
+      document.getElementById('statusSerial').textContent = serial;
+      syncCommandDevice();
+      syncScrcpyDevice();
+      addLog(`[OK] 已切换设备上下文：${serial}`, 'ok');
+    });
+
+    document.getElementById('connectionState').addEventListener('click', () => {
+      addLog('[INFO] 当前设备连接状态：device');
+      showToast('设备连接正常');
+    });
+
+    document.getElementById('connectButton').addEventListener('click', connectWireless);
+    logFilter.addEventListener('change', applyLogFilter);
+    document.getElementById('clearLog').addEventListener('click', () => {
+      logOutput.innerHTML = '';
+      logLines = 0;
+      logCount.textContent = '0 条记录';
+      showToast('日志已清空');
+    });
+    document.getElementById('toggleLog').addEventListener('click', event => {
+      workspace.classList.toggle('log-collapsed');
+      event.currentTarget.textContent = workspace.classList.contains('log-collapsed') ? '展开' : '收起';
+    });
+    applyLogFilter();
+  </script>
+</body>
+</html>
