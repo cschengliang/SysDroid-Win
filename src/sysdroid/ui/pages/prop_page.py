@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import shlex
+from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QComboBox,
     QDialog,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -21,13 +26,15 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from sysdroid.core.backend import TaskRunner
-from sysdroid.core.props import PropController
+from sysdroid.core.props import PropController, diff_properties, parse_getprop
 from sysdroid.ui import kit as ui_kit
+from sysdroid.ui.tables import TableTools
 def _note(text: str) -> QLabel:
     label = QLabel(text)
     label.setWordWrap(True)
@@ -64,7 +71,8 @@ class PropPage(QWidget):
         self._column_widths_initialized = False
         self._active = False
         self._initial_requested = False
-        self._editor_floating = False
+        self._baseline: dict[str, str] | None = None
+        self._baseline_label = ""
         self._editor_sizes = {Qt.Orientation.Horizontal: [650, 320]}
         self._rows: dict[str, int] = {}
         self._names: tuple[str, ...] = ()
@@ -142,7 +150,25 @@ class PropPage(QWidget):
         self.editor_toggle_button.setToolTip("显示或关闭属性读取 / 编辑区；保留未提交的内容")
         self.editor_toggle_button.toggled.connect(self._set_editor_visible)
         filters.addWidget(self.editor_toggle_button)
+        self.snapshot_button = QToolButton()
+        self.snapshot_button.setObjectName("propSnapshot")
+        self.snapshot_button.setText("快照对比")
+        self.snapshot_button.setToolTip("记录或加载属性基线，并与当前快照比较新增 / 删除 / 变化")
+        self.snapshot_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        snapshot_menu = QMenu(self.snapshot_button)
+        self.record_action = snapshot_menu.addAction("记录当前快照为基线", self.record_baseline)
+        self.load_action = snapshot_menu.addAction("从文件加载基线…", self._load_baseline_file)
+        self.save_action = snapshot_menu.addAction("保存当前快照到文件…", self._save_snapshot_file)
+        snapshot_menu.addSeparator()
+        self.compare_action = snapshot_menu.addAction("与基线对比…", self.show_diff)
+        self.snapshot_button.setMenu(snapshot_menu)
+        filters.addWidget(self.snapshot_button)
         layout.addLayout(filters)
+        self.baseline_label = _note("")
+        self.baseline_label.setObjectName("propBaseline")
+        ui_kit.set_role(self.baseline_label, "hint")
+        self.baseline_label.hide()
+        layout.addWidget(self.baseline_label)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
@@ -182,25 +208,6 @@ class PropPage(QWidget):
         editor_scroll.setMinimumWidth(320)
         editor = QGroupBox("读取 / 编辑 / 新增属性")
         editor_layout = QVBoxLayout(editor)
-        editor_controls = QHBoxLayout()
-        editor_controls.addStretch()
-        self.editor_popout_button = QPushButton("弹出窗口")
-        self.editor_popout_button.setObjectName("propEditorPopout")
-        self.editor_popout_button.clicked.connect(self._toggle_editor_window)
-        editor_controls.addWidget(self.editor_popout_button)
-        self.editor_close_button = QPushButton("关闭")
-        self.editor_close_button.setObjectName("propEditorClose")
-        self.editor_close_button.setToolTip("关闭编辑区；可从顶部“编辑区”重新打开")
-        self.editor_close_button.clicked.connect(lambda: self.editor_toggle_button.setChecked(False))
-        editor_controls.addWidget(self.editor_close_button)
-        editor_layout.addLayout(editor_controls)
-        self.editor_device_label = _note("")
-        self.editor_device_label.setObjectName("propEditorDevice")
-        editor_layout.addWidget(self.editor_device_label)
-        self.editor_error_label = _note("")
-        self.editor_error_label.setObjectName("propEditorError")
-        ui_kit.set_role(self.editor_error_label, "error")
-        editor_layout.addWidget(self.editor_error_label)
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
@@ -260,65 +267,47 @@ class PropPage(QWidget):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([650, 320])
         layout.addWidget(splitter, 1)
-        self.editor_window = QDialog(self)
-        self.editor_window.setObjectName("propEditorWindow")
-        self.editor_window.setWindowTitle("系统属性 · 读取 / 编辑")
-        self.editor_window.resize(540, 660)
-        window_layout = QVBoxLayout(self.editor_window)
-        window_layout.setContentsMargins(8, 8, 8, 8)
-        self.editor_window.finished.connect(lambda result: self.editor_toggle_button.setChecked(False))
+        self.table_tools = TableTools(self.table, export_name="props", menu=self._extend_menu,
+                                      refresh=self.refresh_button.click, search=self.search,
+                                      text=self._cell_text)
 
+    def _cell_text(self, row: int, column: int) -> str | None:
+        # Export / copy the raw value, not the "（空值）" display text.
+        if column != 1:
+            return None
+        item = self.table.item(row, 1)
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else ""
+
+    def _extend_menu(self, menu: QMenu, row: int) -> None:
+        item = self.table.item(row, 0)
+        name = item.data(Qt.ItemDataRole.UserRole) if item is not None else ""
+        if not name:
+            return
+        if self._selected_name() != name:
+            self.table.selectRow(row)
+        menu.addAction("重新读取此属性", self._read).setEnabled(self.read_button.isEnabled())
+        menu.addAction("复制名称", lambda: QApplication.clipboard().setText(name))
+        value = self.controller.properties.get(name)
+        if value is not None:
+            menu.addAction("复制原始值", lambda: QApplication.clipboard().setText(value))
+            menu.addAction("复制为 setprop 命令（设备 shell）", lambda: QApplication.clipboard().setText(
+                shlex.join(["setprop", name, value])))
     def _remember_editor_sizes(self) -> None:
         sizes = self.detail_splitter.sizes()
-        if not self._editor_floating and not self.editor_scroll.isHidden() and len(sizes) == 2 and all(sizes):
+        if not self.editor_scroll.isHidden() and len(sizes) == 2 and all(sizes):
             self._editor_sizes[self.detail_splitter.orientation()] = sizes
 
     def _restore_editor_sizes(self) -> None:
         self.detail_splitter.setSizes(self._editor_sizes.get(self.detail_splitter.orientation(), [300, 320]))
-
-    def _update_editor_chrome(self) -> None:
-        self.editor_popout_button.setText("嵌回页面" if self._editor_floating else "弹出窗口")
-        serial, state = self.controller.serial, self.controller.device_state
-        device = f"{serial} · {state or '未知状态'}" if serial else "未选择设备"
-        self.editor_window.setWindowTitle(f"系统属性 · 读取 / 编辑 · {serial or '未选择设备'}")
-        self.editor_device_label.setText(f"当前设备：{device}\n{self.status_label.text()}")
-        self.editor_device_label.setVisible(self._editor_floating)
-        self.editor_error_label.setVisible(self._editor_floating and bool(self.editor_error_label.text()))
-
-    def _dock_editor(self) -> None:
-        self.editor_window.layout().removeWidget(self.editor_scroll)
-        self.detail_splitter.addWidget(self.editor_scroll)
-        self.detail_splitter.setStretchFactor(1, 1)
-        self._editor_floating = False
-        self.editor_window.hide()
-        self.editor_scroll.setVisible(self.editor_toggle_button.isChecked())
-        if self.editor_toggle_button.isChecked():
-            self._restore_editor_sizes()
-        self._update_editor_chrome()
 
     def _set_editor_visible(self, visible: bool) -> None:
         self._context_revision += 1
         self.editor_toggle_button.setText("关闭编辑区" if visible else "显示编辑区")
         if not visible:
             self._remember_editor_sizes()
-            if self._editor_floating:
-                self._dock_editor()
         self.editor_scroll.setVisible(visible)
-        if visible and not self._editor_floating:
+        if visible:
             self._restore_editor_sizes()
-
-    def _toggle_editor_window(self) -> None:
-        if self._confirmation_open:
-            return
-        self._context_revision += 1
-        if self._editor_floating:
-            self._dock_editor()
-        else:
-            self._remember_editor_sizes()
-            self.editor_window.layout().addWidget(self.editor_scroll)
-            self._editor_floating = True
-            self._update_editor_chrome()
-            self.editor_window.setVisible(self._active)
 
     def set_device(self, serial: str, state: str = "device") -> None:
         self.controller.set_device(serial, state)
@@ -332,7 +321,6 @@ class PropPage(QWidget):
             self._controller_changed()
             self._apply_filter()
             self._ensure_loaded()
-        self.editor_window.setVisible(active and self._editor_floating and self.editor_toggle_button.isChecked())
 
     def _ensure_loaded(self) -> None:
         if (self._active and self._ready() and not self.controller.snapshot_valid
@@ -346,7 +334,7 @@ class PropPage(QWidget):
         if self.detail_splitter.orientation() != orientation:
             self._remember_editor_sizes()
             self.detail_splitter.setOrientation(orientation)
-            if not self._editor_floating and self.editor_toggle_button.isChecked():
+            if self.editor_toggle_button.isChecked():
                 self._restore_editor_sizes()
 
     def _controller_changed(self) -> None:
@@ -364,7 +352,6 @@ class PropPage(QWidget):
         self.device_input.setText(f"{serial} · {state or '未知状态'}" if serial else "")
         fallback = "尚未读取属性" if serial and state == "device" else "请在顶部选择在线设备"
         self.status_label.setText(self.controller.status or fallback)
-        self._update_editor_chrome()
         if self._active:
             if self._table_snapshot != self.controller.properties:
                 self._refresh_table()
@@ -574,16 +561,17 @@ class PropPage(QWidget):
         self.read_button.setEnabled(actions_ready and has_name)
         self.write_button.setEnabled(actions_ready and has_name)
         self.output_button.setEnabled(bool(self.controller.last_task_id))
-        for button in (self.editor_toggle_button, self.editor_popout_button, self.editor_close_button):
-            button.setEnabled(not self._confirmation_open)
+        self.editor_toggle_button.setEnabled(not self._confirmation_open)
+        self.snapshot_button.setEnabled(not self._confirmation_open)
+        self.compare_action.setEnabled(self._baseline is not None and self.controller.snapshot_valid)
+        self.record_action.setEnabled(self.controller.snapshot_valid)
+        self.save_action.setEnabled(self.controller.snapshot_valid)
 
     def _display_error(self) -> None:
         text = "\n".join(message for message in (self.controller.error, self._local_error) if message)
         self.error_label.setText(text)
         self.error_label.setVisible(bool(text))
         self.error_scroll.setVisible(bool(text))
-        self.editor_error_label.setText(text)
-        self.editor_error_label.setVisible(self._editor_floating and bool(text))
 
     def _set_local_error(self, message: str) -> None:
         self._local_error = message
@@ -627,7 +615,7 @@ class PropPage(QWidget):
             if name in self.controller.properties
             else "（当前快照未列出此属性；不等于空值）"
         )
-        confirmation = QMessageBox(self.editor_window if self._editor_floating else self)
+        confirmation = QMessageBox(self)
         confirmation.setObjectName("propWriteConfirmation")
         confirmation.setWindowTitle("确认写入 Android 属性")
         confirmation.setIcon(QMessageBox.Icon.Warning)
@@ -674,6 +662,120 @@ class PropPage(QWidget):
             self._set_local_error(str(exc))
         else:
             self._display_error()
+
+    # -- snapshot baseline / diff -------------------------------------------
+    def _set_baseline(self, properties: dict[str, str], label: str) -> None:
+        self._baseline = dict(properties)
+        self._baseline_label = label
+        self.baseline_label.setText(f"基线：{label} · {len(properties)} 条")
+        self.baseline_label.show()
+        self._update_enabled()
+
+    def record_baseline(self) -> None:
+        if not self.controller.snapshot_valid:
+            return
+        stamp = datetime.now().strftime("%H:%M:%S")
+        self._set_baseline(self.controller.properties, f"{self.controller.serial} @ {stamp}")
+
+    def snapshot_document(self) -> dict:
+        return {"format": "sysdroid-props", "version": 1, "serial": self.controller.serial,
+                "captured": datetime.now().isoformat(timespec="seconds"),
+                "properties": dict(sorted(self.controller.properties.items()))}
+
+    def _save_snapshot_file(self, path: str | None = None) -> str:
+        if not self.controller.snapshot_valid:
+            return ""
+        if path is None:
+            default = f"props-{self.controller.serial.replace(':', '_')}-{datetime.now():%Y%m%d-%H%M%S}.json"
+            path, _ = QFileDialog.getSaveFileName(self, "保存属性快照", str(Path.home() / default),
+                                                  "属性快照 (*.json)")
+            if not path:
+                return ""
+        try:
+            Path(path).write_text(json.dumps(self.snapshot_document(), ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError as exc:
+            self._set_local_error(f"保存快照失败：{exc}")
+            return ""
+        return path
+
+    def load_baseline(self, path: str) -> bool:
+        """Accept a saved snapshot JSON or a raw ``adb shell getprop`` dump."""
+        try:
+            # Bytes, not read_text(): universal newlines would turn a CR inside a value into LF.
+            text = Path(path).read_bytes().decode("utf-8-sig")
+            if text.lstrip().startswith("{"):
+                document = json.loads(text)
+                properties = document.get("properties") if isinstance(document, dict) else None
+                if not isinstance(properties, dict) or not all(
+                        isinstance(k, str) and isinstance(v, str) for k, v in properties.items()):
+                    raise ValueError("JSON 中缺少 properties 文本映射")
+                label = f"{Path(path).name}（{document.get('serial') or '未知设备'}）"
+            else:
+                properties = parse_getprop(text.replace("\r\n", "\n"))
+                label = Path(path).name
+        except (OSError, ValueError) as exc:
+            self._set_local_error(f"加载基线失败：{exc}")
+            return False
+        self._local_error = ""
+        self._display_error()
+        self._set_baseline(properties, label)
+        return True
+
+    def _load_baseline_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "加载属性基线", str(Path.home()),
+                                              "属性快照或 getprop 输出 (*.json *.txt *.prop);;所有文件 (*)")
+        if path:
+            self.load_baseline(path)
+
+    def diff_rows(self) -> list[tuple[str, str, str | None, str | None]]:
+        return diff_properties(self._baseline or {}, self.controller.properties)
+
+    def show_diff(self) -> QDialog | None:
+        if self._baseline is None or not self.controller.snapshot_valid:
+            return None
+        rows = self.diff_rows()
+        labels = {"added": "新增", "removed": "删除", "changed": "变化"}
+        dialog = QDialog(self)
+        dialog.setObjectName("propDiffDialog")
+        dialog.setWindowTitle(f"属性对比 · 基线 {self._baseline_label} → 当前 {self.controller.serial}")
+        dialog.resize(860, 520)
+        layout = QVBoxLayout(dialog)
+        counts = {kind: sum(row[0] == kind for row in rows) for kind in labels}
+        layout.addWidget(_note(
+            f"新增 {counts['added']} · 删除 {counts['removed']} · 变化 {counts['changed']}；"
+            "当前值来自最近一次刷新，单项读取 / 写入后也会更新。" if rows else "当前快照与基线一致。"))
+        table = QTableWidget(len(rows), 4)
+        table.setObjectName("propDiffTable")
+        table.setHorizontalHeaderLabels(["变化", "属性名称", "基线值", "当前值"])
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        table.verticalHeader().hide()
+        table.setWordWrap(False)
+        for row, (kind, name, before, after) in enumerate(rows):
+            for column, text in enumerate((labels[kind], name, before, after)):
+                item = QTableWidgetItem("" if text is None else text)
+                if text is None:
+                    item.setToolTip("不存在")
+                table.setItem(row, column, item)
+        for column, width in enumerate((60, 260, 230, 230)):
+            table.setColumnWidth(column, width)
+        table.horizontalHeader().setStretchLastSection(True)
+        dialog.table_tools = TableTools(table, export_name="props-diff", sortable=True)
+        layout.addWidget(table, 1)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        export = QPushButton("导出 CSV…")
+        export.clicked.connect(lambda: dialog.table_tools.export_csv())
+        export.setEnabled(bool(rows))
+        buttons.addWidget(export)
+        close = QPushButton("关闭")
+        close.clicked.connect(dialog.accept)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.show()
+        return dialog
 
     def open_output(self) -> None:
         if self.controller.last_task_id:

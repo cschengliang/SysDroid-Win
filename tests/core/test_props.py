@@ -520,3 +520,74 @@ def test_confirmation_rejects_editor_change_even_when_restored(prop_runner, monk
     page._write()
     assert len(prop_runner.requests) == count
     assert page.controller.properties == BASE_PROPERTIES
+
+
+@pytest.fixture
+def loaded_page(prop_runner):
+    from sysdroid.ui.pages.prop_page import PropPage
+
+    page = PropPage(prop_runner)
+    page.set_device("device-a")
+    page.set_active(True)
+    prop_runner.finish(prop_runner.requests[-1], respond(prop_runner.requests[-1], BASE_PROPERTIES))
+    yield page
+    page.deleteLater()
+
+
+def test_prop_table_copy_and_export_use_raw_values(loaded_page, tmp_path):
+    import csv
+    from PySide6.QtWidgets import QApplication
+
+    page = loaded_page
+    row = page._rows["debug.pygui.empty"]
+    assert page.table.item(row, 1).text() == "（空值）"
+    page.table.selectRow(row)
+    assert page.table_tools.copy_selection() == "debug.pygui.empty\t\t普通属性"
+    assert QApplication.clipboard().text() == "debug.pygui.empty\t\t普通属性"
+    path = page.table_tools.export_csv(str(tmp_path / "props.csv"))
+    with open(path, encoding="utf-8-sig", newline="") as stream:
+        rows = list(csv.reader(stream))
+    assert rows[0] == ["属性名称", "当前值", "前缀类型"]
+    assert ["debug.pygui.empty", "", "普通属性"] in rows and len(rows) == 3
+
+
+def test_prop_context_menu_offers_page_and_shared_actions(loaded_page):
+    page = loaded_page
+    menu = page.table_tools.build_menu(page._rows["debug.pygui.existing"], 1)
+    texts = [action.text() for action in menu.actions() if action.text()]
+    assert texts[:4] == ["重新读取此属性", "复制名称", "复制原始值", "复制为 setprop 命令（设备 shell）"]
+    assert {"复制单元格", "复制行", "导出 CSV…"} <= set(texts)
+    assert page._selected_name() == "debug.pygui.existing"
+
+
+def test_snapshot_baseline_diff_and_file_round_trip(prop_runner, loaded_page, tmp_path):
+    page = loaded_page
+    assert not page.compare_action.isEnabled()
+    page.record_baseline()
+    assert page.compare_action.isEnabled() and "2 条" in page.baseline_label.text()
+    page.controller.refresh()
+    prop_runner.finish(prop_runner.requests[-1], getprop_output({"debug.pygui.existing": "after", "new": "1"}))
+    assert page.diff_rows() == [("removed", "debug.pygui.empty", "", None),
+                                ("changed", "debug.pygui.existing", "before", "after"),
+                                ("added", "new", None, "1")]
+    dialog = page.show_diff()
+    assert dialog.findChild(type(page.table), "propDiffTable").rowCount() == 3
+    dialog.close()
+    saved = page._save_snapshot_file(str(tmp_path / "snap.json"))
+    assert page.load_baseline(saved) and page.diff_rows() == []
+    dump = tmp_path / "getprop.txt"
+    dump.write_bytes("[debug.pygui.existing]: [after]\r\n".encode())
+    assert page.load_baseline(str(dump))
+    assert page.diff_rows() == [("added", "new", None, "1")]
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"properties": [1]}', encoding="utf-8")
+    assert not page.load_baseline(str(bad)) and "加载基线失败" in page.error_label.text()
+
+
+def test_editor_has_no_popout_window(loaded_page):
+    page = loaded_page
+    assert not hasattr(page, "editor_window")
+    page.editor_toggle_button.setChecked(False)
+    assert page.editor_scroll.isHidden()
+    page.editor_toggle_button.setChecked(True)
+    assert not page.editor_scroll.isHidden()
