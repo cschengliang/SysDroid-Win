@@ -120,6 +120,10 @@ jobs:
           $netrc = Join-Path $env:RUNNER_TEMP 'netrc'
           "machine api.github.com login x-access-token password $env:GH_TOKEN" | Set-Content $netrc -Encoding ascii
           $env:NETRC = $netrc
+          # The runner's PATH includes third-party DLL folders (e.g. MySQL's libssl),
+          # which PyInstaller would otherwise pick up. Keep only Windows system dirs.
+          $sys = $env:SystemRoot
+          $env:PATH = @((Join-Path $PWD $env:PY_DIR), "$sys\System32", "$sys", "$sys\System32\Wbem", "$sys\System32\WindowsPowerShell\v1.0") -join ';'
           try {
             & "$env:PY_DIR\python.exe" -s build_android_toolbox.py
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
