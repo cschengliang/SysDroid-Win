@@ -109,3 +109,25 @@ lib\python-3.14.8-embed-amd64\python.exe -s build_android_toolbox.py
 ```
 
 构建只能在 Windows x64 上，使用上面这个嵌入式解释器（3.14.8，带 `-s`）运行。生成的 `dist\AndroidToolbox-win-x64.zip` 上传到 GitHub Releases 供最终用户下载。
+
+## 8. 用 GitHub Actions 自动构建
+
+仓库里的 `.github/workflows/build.yml` 会在 GitHub 的 Windows 机器上，从零搭好环境、运行测试，然后打出便携版。
+
+**触发方式**
+
+- **手动构建（不发布）**：打开仓库的 **Actions** 页面，左侧选 **Build portable**，点 **Run workflow**，选好分支后运行。
+- **发版**：在本地打标签并推送，就会自动构建并创建 Release：
+
+  ```bat
+  git tag v0.1.0
+  git push origin v0.1.0
+  ```
+
+**流程**：从官方地址下载 Python 3.14.8 嵌入版、Scrcpy 5.0 和 Windows Terminal 1.25.2733.0，并逐个校验 SHA-256（不一致会直接失败），再执行 `pip install -r requirements.txt`（CI 不使用镜像）、`pytest`，最后运行 `build_android_toolbox.py`。下载内容会缓存，下次构建更快。
+
+**产物在哪里**
+
+- 每次构建都会在该次运行页面底部的 **Artifacts** 里留下 `AndroidToolbox-win-x64-<版本>`，包含 `AndroidToolbox-win-x64-<版本>.zip` 及其 `.sha256` 校验文件。`<版本>` 在推送标签时是标签名（如 `v0.1.0`），手动构建时是提交的短 SHA。Artifact 默认保留 90 天。
+- 推送 `v*` 标签时，同样的文件还会附加到 [Releases](https://github.com/cschengliang/SysDroid-Win/releases) 中对应版本的页面，更新说明会根据提交记录自动生成。
+- 构建失败时，可以在 Artifacts 里下载 `build-logs-*`，查看 `failure.json` 和 PyInstaller 日志。
