@@ -1,6 +1,6 @@
 """Produce the Windows x64 portable directory, ZIP, and SHA-256 manifests.
 
-Entry: lib/python-3.14.8-embed-amd64/python.exe -s build_android_toolbox.py
+Entry (from the repository root): lib/python-3.14.8-embed-amd64/python.exe -s scripts/build_android_toolbox.py
 The development interpreter, its _pth file, and installed packages are never changed.
 Each freeze attempt runs in a fresh instance of that same embedded interpreter.
 """
@@ -28,7 +28,9 @@ from urllib.request import Request, urlopen
 import uuid
 import zipfile
 
-SOURCE_ROOT = Path(__file__).resolve().parent
+SCRIPTS_DIR = Path(__file__).resolve().parent
+SOURCE_ROOT = SCRIPTS_DIR.parent
+PACKAGE_ROOT = SOURCE_ROOT / "src"
 EMBEDDED_ROOT = SOURCE_ROOT / "lib" / "python-3.14.8-embed-amd64"
 SITE_PACKAGES = EMBEDDED_ROOT / "Lib" / "site-packages"
 BUILD_ROOT = SOURCE_ROOT / "build" / "android-toolbox"
@@ -98,7 +100,7 @@ def _require_interpreter() -> None:
         if not entry:
             raise BuildError("A current-working-directory import path is not allowed during a release build.")
         path = Path(entry).resolve()
-        if not (_beneath(path, EMBEDDED_ROOT) or path == SOURCE_ROOT):
+        if not (_beneath(path, EMBEDDED_ROOT) or path in (SOURCE_ROOT, PACKAGE_ROOT, SCRIPTS_DIR)):
             raise BuildError(f"Unexpected interpreter import path (no external Python dependencies allowed): {path}")
     for filename in ("python314.zip", "python314.dll", "python3.dll", "LICENSE.txt"):
         if not (EMBEDDED_ROOT / filename).is_file():
@@ -345,7 +347,9 @@ def validate_stdlib_analysis(analysis, source_root: Path, stage: Path, stdlib: P
     for name, source, kind in [*analysis.pure, *analysis.binaries, *analysis.datas]:
         path = Path(source).resolve()
         approved = _beneath(path, EMBEDDED_ROOT) or _beneath(path, stage)
-        approved = approved or (path.parent == source_root and path.suffix == ".py")
+        app_root = source_root / "src" / "sysdroid"
+        approved = approved or path == source_root / "android_toolbox.py"
+        approved = approved or (_beneath(path, app_root) and path.suffix == ".py")
         if not approved:
             raise BuildError(f"Analysis collected a file outside approved embedded/application inputs: {name}: {path} ({kind})")
         if path.suffix.lower() in {".pyd", ".dll"} and _beneath(path, windows):
@@ -449,7 +453,7 @@ def _freeze_child(stage: Path, attempt: int) -> int:
     stdlib = stage / "stdlib"
     attempt_root = stage / f"freeze-{attempt}"
     attempt_root.mkdir()
-    sys.path[:0] = [str(stdlib), str(SOURCE_ROOT)]
+    sys.path[:0] = [str(stdlib), str(PACKAGE_ROOT)]
     importlib.invalidate_caches()
     # PyInstaller's isolated child explicitly receives sys.path, so it also sees
     # the extracted packages despite the embedded interpreter ignoring PYTHONPATH.
@@ -739,11 +743,11 @@ def _build(vc_entitlement: Path | None = None) -> int:
                 "runtime_distributions": _distribution_info(runtime),
                 "build_distributions": _distribution_info(build),
                 "dependency_exceptions": [QT_METADATA_EXCEPTION],
-                "build_inputs": {path.name: _sha256(path) for path in (SOURCE_ROOT / "AndroidToolbox.spec", Path(__file__).resolve(), SOURCE_ROOT / "portable_assets.py")},
+                "build_inputs": {path.name: _sha256(path) for path in (SOURCE_ROOT / "AndroidToolbox.spec", Path(__file__).resolve(), SCRIPTS_DIR / "portable_assets.py")},
             }
             _json(release / "build-info.json", info)
             shutil.copy2(SOURCE_ROOT / "README.md", release / "README.md")
-            sys.path.insert(0, str(SOURCE_ROOT))
+            sys.path.insert(0, str(SCRIPTS_DIR))
             from portable_assets import stage_portable_assets
 
             assets = stage_portable_assets(SOURCE_ROOT, release, stage)

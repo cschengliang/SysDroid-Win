@@ -18,7 +18,7 @@ env:
   PY_VERSION: 3.14.8
   PY_DIR: lib\python-3.14.8-embed-amd64
   PY_SHA256: a93abe456ab01bd96d7a085b3cdb6566b3063f4241360d114142fbdb07f0a310
-  # Must match TOOLS in portable_assets.py
+  # Must match TOOLS in scripts/portable_assets.py
   SCRCPY_NAME: scrcpy-win64-v5.0
   SCRCPY_URL: https://github.com/Genymobile/scrcpy/releases/download/v5.0/scrcpy-win64-v5.0.zip
   SCRCPY_SHA256: 44c10d9e82f20ea67227d14d37bf9fbe3603117c5736df3f514544a02ba20a73
@@ -129,7 +129,7 @@ jobs:
           # child the build uses to verify OS-signed DLLs (icu.dll, propsys.dll). Let 5.1 use its defaults.
           Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue
           try {
-            & "$env:PY_DIR\python.exe" -s build_android_toolbox.py
+            & "$env:PY_DIR\python.exe" -s scripts\build_android_toolbox.py
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           } finally {
             Remove-Item $netrc -Force -ErrorAction SilentlyContinue
