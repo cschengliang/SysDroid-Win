@@ -77,3 +77,23 @@ def test_execution_dialog_remembers_last_parameters(page, runner, monkeypatch):
     assert fresh.execution_dialog.fields[0, "key"].text() == "ro.build.fingerprint"
     assert fresh.execution_dialog.run_button.isEnabled()
     fresh.execution_dialog.reject()
+
+
+def test_run_directly_only_for_simple_commands(page, runner, monkeypatch):
+    started = []
+    monkeypatch.setattr(runner, "start_adb", lambda title, args, **kwargs: started.append((args, kwargs["serial"])) or FakeTask())
+    opened = []
+    monkeypatch.setattr(page, "open_execution", lambda command_id=None: opened.append(command_id))
+    page._refresh_library(selected_id="packages")
+    assert not page.run_direct_button.isEnabled()
+    page.set_device("SER", "device")
+    assert page.run_direct_button.isEnabled()
+    page.run_direct_button.click()
+    assert started == [(["shell", "pm list packages -3"], "SER")]
+    page._refresh_library(selected_id="props")
+    assert not page.run_direct_button.isEnabled()
+    assert page.run_directly("props") is None and opened == ["props"]
+    page.set_device("", "")
+    assert page.run_directly("devices") is not None and started[-1] == (["devices", "-l"], "")
+    texts = [action.text() for action in page.library_tools.build_menu(page._library_rows["devices"], 1).actions() if action.text()]
+    assert "直接执行" in texts

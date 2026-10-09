@@ -25,6 +25,11 @@ def command_preview(prepared: PreparedCommand, program: str = "adb") -> str:
     return powershell_command(program, (["-s", prepared.serial] if prepared.serial else []) + list(prepared.args))
 
 
+def can_run_directly(command: Command) -> bool:
+    """Simple commands skip the dialog: no parameters, no Root mark, no remote script."""
+    return not variable_names(command.template) and command.permission == "user" and not is_remote_shell(command)
+
+
 def _table(headers: list[str], name: str) -> QTableWidget:
     table = QTableWidget(0, len(headers))
     table.setObjectName(name)
@@ -266,6 +271,8 @@ class CommandLibraryPage(QWidget):
         self.device_input.setReadOnly(True)
         row.addWidget(self.device_input, 1)
         self.run_selected = _button("执行所选", lambda: self.open_execution(self._selected_id()), row)
+        self.run_direct_button = _button("直接执行", lambda: self.run_directly(self._selected_id()), row)
+        self.run_direct_button.setToolTip("无参数且非 Root 的命令可跳过参数预览，立即在当前设备执行")
         _button("快速执行 Ctrl+K", self.open_execution, row)
         self.manage_button = _button("管理命令", self._open_management, row)
         layout.addLayout(row)
@@ -483,6 +490,8 @@ class CommandLibraryPage(QWidget):
             return
         menu.addAction("执行…", lambda: self.open_execution(command_id))
         menu.addAction("编辑", lambda: self.edit_command(command_id))
+        if self._direct_ready(self.store.commands.get(command_id)):
+            menu.addAction("直接执行", lambda: self.run_directly(command_id))
 
     def _management_menu(self, menu, row: int) -> None:
         if self.management_table.currentRow() != row:
@@ -514,6 +523,7 @@ class CommandLibraryPage(QWidget):
         self.serial = serial
         self.device_state = state
         self.device_input.setText(f"{serial} · {state}" if serial else "未选择设备")
+        self._selection_changed()
         if self.execution_dialog:
             self.execution_dialog.update_preview()
 
@@ -722,6 +732,11 @@ class CommandLibraryPage(QWidget):
     def _selection_changed(self) -> None:
         command = self.store.commands.get(self._selected_id())
         self.run_selected.setEnabled(command is not None and not self.runtime_error)
+        self.run_direct_button.setEnabled(self._direct_ready(command))
+        if command is not None and not can_run_directly(command):
+            self.run_direct_button.setToolTip("此命令含参数、标记为 Root 或为远程 Shell 脚本，请通过「执行所选」预览后执行")
+        else:
+            self.run_direct_button.setToolTip("无参数且非 Root 的命令可跳过参数预览，立即在当前设备执行")
         self.edit_selected.setEnabled(command is not None and not self.store.error)
         self.selection_label.setText(f"{command.name} · {EXECUTION_TYPES[command.execution_type]} · {command.description or '无描述'} · 超时 {command.timeout} 秒" if command else "选择命令后可执行；双击名称打开参数预览。")
 
@@ -846,6 +861,30 @@ class CommandLibraryPage(QWidget):
         if self.editing_id == command.id:
             self._load_editor(None)
         self._command_changed(command.id)
+
+    def _direct_ready(self, command: Command | None) -> bool:
+        return (command is not None and can_run_directly(command) and not self.runtime_error
+                and (command.scope == "host" or (bool(self.serial) and self.device_state == "device")))
+
+    def run_directly(self, command_id: str | None = None) -> Task | None:
+        command = self.store.commands.get(command_id or self._selected_id())
+        if command is None:
+            return None
+        if not can_run_directly(command):
+            self.open_execution(command.id)
+            return None
+        if not self._direct_ready(command):
+            self._error(self.runtime_error or "设备当前不可用，请选择 state=device 的设备")
+            return None
+        try:
+            prepared = prepare_command(command, {}, self.serial)
+        except ValueError as exc:
+            self._error(str(exc))
+            return None
+        task = self.runner.start_adb(prepared.title, list(prepared.args), serial=prepared.serial,
+                                     command_id=prepared.command_id, timeout=prepared.timeout, source="command")
+        self.show_output.emit(task.id)
+        return task
 
     def open_execution(self, command_id: str | None = None) -> None:
         if self.runtime_error:
