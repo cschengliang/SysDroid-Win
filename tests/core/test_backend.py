@@ -69,11 +69,12 @@ def test_cancelling_queued_task_prevents_process_side_effects(runner, qtbot, tmp
 
 
 def test_cleared_task_remains_in_persistent_history(runner):
-    task = runner.start_adb("history", ["devices"])
+    task = runner.start_adb("history", ["devices"], source="command")
     runner.cancel(task.id)
     history = list(runner.history)
     active = runner.start_adb("queued adb", ["devices"])
     runner.clear_finished()
+    runner.flush_history()
     restored = TaskRunner(runner)
     saved = restored.get_task(task.id)
     assert task.id not in runner.tasks
@@ -84,12 +85,13 @@ def test_cleared_task_remains_in_persistent_history(runner):
 
 
 def test_clear_history_is_selective_and_keeps_current_tasks(runner):
-    adb = runner.start_adb("old adb", ["devices"])
+    adb = runner.start_adb("old adb", ["devices"], source="command")
     runner._receive_output(adb.id, "stdout", "saved output\n")
     runner.cancel(adb.id)
-    scrcpy = runner.start_process("other kind", "scrcpy", [], kind="scrcpy")
+    scrcpy = runner.start_process("other kind", "scrcpy", [], kind="scrcpy", source="command")
     runner.cancel(scrcpy.id)
-    active = runner.start_adb("queued adb", ["devices"])
+    runner.flush_history()
+    active = runner.start_adb("queued adb", ["devices"], source="command")
     tasks = runner.tasks.copy()
     changes = []
     runner.history_changed.connect(lambda: changes.append((
@@ -116,7 +118,7 @@ def test_clear_history_is_selective_and_keeps_current_tasks(runner):
 
 def test_clear_history_preserves_running_adb_and_records_its_completion(runner, qtbot, monkeypatch):
     from sysdroid.core import backend as android_backend
-    old = runner.start_adb("old adb", ["devices"])
+    old = runner.start_adb("old adb", ["devices"], source="command")
     runner.cancel(old.id)
     entered = threading.Event()
     release = threading.Event()
@@ -128,7 +130,7 @@ def test_clear_history_preserves_running_adb_and_records_its_completion(runner, 
         return android_backend._AdbResult(stdout="new result\n", exit_code=0)
 
     monkeypatch.setattr(runner, "_execute_adb", execute)
-    active = runner.start_adb("running adb", ["devices"])
+    active = runner.start_adb("running adb", ["devices"], source="command")
     try:
         qtbot.waitUntil(entered.is_set, timeout=1000)
         running = runner._adb_running[active.id]
@@ -147,6 +149,7 @@ def test_clear_history_preserves_running_adb_and_records_its_completion(runner, 
         assert (active.status, active.exit_code, active.stdout) == (
             "succeeded", 0, "existing output\nnew result\n")
         assert runner.history == [active]
+        runner.flush_history()
         restored = TaskRunner(runner)
         assert restored.get_task(old.id) is None
         saved = restored.get_task(active.id)
@@ -178,10 +181,11 @@ def _fail_history_commit(monkeypatch, history_path, stage):
 
 @pytest.mark.parametrize("stage", ["write", "replace"])
 def test_clear_history_storage_failure_preserves_disk_memory_and_signals(runner, monkeypatch, stage):
-    adb = runner.start_adb("saved adb", ["devices"])
+    adb = runner.start_adb("saved adb", ["devices"], source="command")
     runner.cancel(adb.id)
-    other = runner.start_process("saved process", "scrcpy", [], kind="scrcpy")
+    other = runner.start_process("saved process", "scrcpy", [], kind="scrcpy", source="command")
     runner.cancel(other.id)
+    runner.flush_history()
     active = runner.start_adb("queued adb", ["devices"])
     original = runner._history_path.read_bytes()
     history = runner.history
@@ -210,10 +214,11 @@ def test_clear_history_storage_failure_preserves_disk_memory_and_signals(runner,
 
 @pytest.mark.parametrize("stage", ["write", "replace"])
 def test_completion_storage_failure_emits_error_without_raising(runner, monkeypatch, stage):
-    old = runner.start_adb("saved adb", ["devices"])
+    old = runner.start_adb("saved adb", ["devices"], source="command")
     runner.cancel(old.id)
+    runner.flush_history()
     original = runner._history_path.read_bytes()
-    task = runner.start_adb("new adb", ["devices"])
+    task = runner.start_adb("new adb", ["devices"], source="command")
     errors = []
     finished = []
     runner.error.connect(errors.append)
@@ -222,6 +227,7 @@ def test_completion_storage_failure_emits_error_without_raising(runner, monkeypa
     with monkeypatch.context() as patch:
         _fail_history_commit(patch, runner._history_path, stage)
         runner.cancel(task.id)
+        runner.flush_history()
 
     assert task.status == "cancelled" and runner.history == [old, task]
     assert finished == [task]
@@ -252,8 +258,9 @@ def test_clear_history_rejects_corrupt_readonly_storage(runner, original):
 
 
 def test_transient_sampling_preserves_history_and_pin_until_released(runner, qtbot):
-    ordinary = runner.start_adb("user output", ["devices"])
+    ordinary = runner.start_adb("user output", ["devices"], source="command")
     runner.cancel(ordinary.id)
+    runner.flush_history()
     original = runner._history_path.read_bytes()
     original_mtime = runner._history_path.stat().st_mtime_ns
     changes = []
@@ -268,6 +275,7 @@ def test_transient_sampling_preserves_history_and_pin_until_released(runner, qtb
         task = runner.start_adb("sample", ["devices"], transient=True)
         runner.cancel(task.id)
         qtbot.wait(1)
+    runner.flush_history()
     assert len([task for task in runner.tasks.values() if task.transient]) <= 21
     assert runner.get_task(first.id).stdout == "pinned original🙂"
     assert runner.history == [ordinary] and changes == []

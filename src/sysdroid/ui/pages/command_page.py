@@ -807,7 +807,8 @@ class CommandLibraryPage(QWidget):
 
     def _execute_single(self, plan: list[PreparedCommand]) -> None:
         step = plan[0]
-        task = self.runner.start_adb(step.title, list(step.args), serial=step.serial, command_id=step.command_id, timeout=step.timeout)
+        task = self.runner.start_adb(step.title, list(step.args), serial=step.serial, command_id=step.command_id,
+                                     timeout=step.timeout, source="command")
         self.show_output.emit(task.id)
 
     def _task_added(self, task: Task) -> None:
@@ -826,7 +827,7 @@ class CommandLibraryPage(QWidget):
             if row is not None:
                 with QSignalBlocker(self.table):
                     self._set_cell(self.table, row, 6, STATUS_LABELS.get(task.status, task.status))
-        if task.kind != "adb":
+        if task.source != "command":
             return
         if self.tabs.currentIndex() != 3 or not self.isVisible():
             self._history_dirty = True
@@ -874,8 +875,11 @@ class CommandLibraryPage(QWidget):
         self._history_dirty = True
         if self.tabs.currentIndex() != 3 or not self.isVisible():
             return
-        tasks = {task.id: task for task in [*self.runner.history, *self.runner.active()] if task.kind == "adb" and not task.transient}
-        self.clear_history_button.setEnabled(any(task.kind == "adb" and not task.transient and task.status in TERMINAL_STATUSES for task in self.runner.history))
+        # Only command-library runs belong here; page-internal queries never reach history.
+        tasks = {task.id: task for task in [*self.runner.history, *self.runner.active()]
+                 if task.kind == "adb" and task.source == "command" and not task.transient}
+        self.clear_history_button.setEnabled(any(task.kind == "adb" and task.source == "command" and task.status in TERMINAL_STATUSES
+                                                 for task in self.runner.history))
         records = sorted(tasks.values(), key=lambda task: task.started_at, reverse=True)
         selected_id = self._history_id()
         scroll = self.history_table.verticalScrollBar().value()

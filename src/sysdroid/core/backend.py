@@ -29,6 +29,13 @@ STATUS_LABELS = {"starting": "启动中", "running": "运行中", "stopping": "�
                  "succeeded": "成功", "failed": "失败", "cancelled": "已停止", "timed_out": "超时"}
 OUTPUT_LIMIT = 2 * 1024 * 1024
 TRUNCATED = "[较早输出已截断；保留最近 2 MiB 字符]\n"
+# Only tasks the user ran from the command library are worth keeping across
+# sessions; page-internal queries (props, settings, apks, users...) are not.
+HISTORY_SOURCES = frozenset({"command"})
+HISTORY_LIMIT = 200
+HISTORY_OUTPUT_LIMIT = 64 * 1024
+HISTORY_TRUNCATED = "[历史记录仅保留每个输出流最近 64 KiB 字符]\n"
+HISTORY_SAVE_DELAY_MS = 500
 _POLL_INTERVAL = 0.25
 # Requests the runner can actually interrupt: streamed shells and adb.exe subprocesses.
 _INTERRUPTIBLE = frozenset({"shell", "exec-out", "logcat", "install", "install-multiple", "start-server", "version"})
@@ -45,6 +52,12 @@ def significant_stderr(text: str) -> str:
 def windows_terminal_arg(value: str) -> str:
     """Windows Terminal splits its command line on ';' even inside one argument."""
     return value.replace(";", "\\;")
+
+
+def _truncate_tail(text: str, limit: int, marker: str) -> str:
+    if len(text) <= limit:
+        return text
+    return marker + text[-(limit - len(marker)):]
 
 
 _SUCCESS_MARKERS = {
@@ -192,6 +205,7 @@ class Task:
     stdout: str = ""
     stderr: str = ""
     transient: bool = False
+    source: str = ""
 
     @property
     def command(self) -> str:
@@ -251,6 +265,7 @@ class TaskRunner(QObject):
     error = Signal(str)
     _adb_result = Signal(str, object)
     _stream_closed = Signal(str)
+    _history_failed = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -268,6 +283,11 @@ class TaskRunner(QObject):
         self._last_elapsed_emit = 0.0
         self._history_writable = True
         self._history_path = DATA_DIR / "history.json"
+        self._history_lock = threading.Lock()
+        self._history_sequence = 0
+        self._history_written = 0
+        self._history_dirty = False
+        self._history_thread: threading.Thread | None = None
         self._features: dict[str, set[str]] = {}
         self._features_lock = threading.Lock()
         try:
@@ -275,15 +295,29 @@ class TaskRunner(QObject):
                 records = json.loads(self._history_path.read_text(encoding="utf-8"))
                 if not isinstance(records, list):
                     raise ValueError("历史记录必须是列表")
-                self.history = [Task(**record) for record in records]
-                if any(task.status not in TERMINAL_STATUSES for task in self.history):
-                    raise ValueError("历史记录包含未结束任务")
+                history = []
+                for record in records:
+                    task = Task(**record)
+                    if task.status not in TERMINAL_STATUSES:
+                        raise ValueError("历史记录包含未结束任务")
+                    if not task.source and task.command_id:
+                        task.source = "command"  # written before tasks carried a source
+                    if task.source in HISTORY_SOURCES:
+                        task.stdout = _truncate_tail(task.stdout, HISTORY_OUTPUT_LIMIT, HISTORY_TRUNCATED)
+                        task.stderr = _truncate_tail(task.stderr, HISTORY_OUTPUT_LIMIT, HISTORY_TRUNCATED)
+                        history.append(task)
+                self.history = history[-HISTORY_LIMIT:]
         except (OSError, ValueError, TypeError) as exc:
             self._history_writable = False
             message = f"无法读取 {self._history_path}：{exc}。原文件保留，不会覆盖。"
             QTimer.singleShot(0, lambda: self.error.emit(message))
         self._adb_result.connect(self._receive_adb_result)
         self._stream_closed.connect(self._receive_eof)
+        self._history_failed.connect(lambda message: self.error.emit(f"无法保存执行历史：{message}"))
+        self._history_timer = QTimer(self)
+        self._history_timer.setSingleShot(True)
+        self._history_timer.setInterval(HISTORY_SAVE_DELAY_MS)
+        self._history_timer.timeout.connect(self._write_history_async)
         self._timer = QTimer(self)
         self._timer.setInterval(200)
         self._timer.timeout.connect(self._tick)
@@ -305,9 +339,9 @@ class TaskRunner(QObject):
         return found
 
     def start_adb(self, title: str, args: list[str], serial: str = "", command_id: str = "",
-                  timeout: int = 10, *, transient: bool = False) -> Task:
+                  timeout: int = 10, *, transient: bool = False, source: str = "") -> Task:
         task = Task(uuid.uuid4().hex, title, self._adb_binary(), (["-s", serial] if serial else []) + list(args),
-                    serial, command_id, "adb", transient=transient)
+                    serial, command_id, "adb", transient=transient, source=source)
         self._register(task)
         QTimer.singleShot(0, lambda: self._spawn_adb(task, list(args), serial, timeout))
         return task
@@ -657,8 +691,8 @@ class TaskRunner(QObject):
 
     def start_process(self, title: str, program: str, args: list[str], serial: str = "",
                       command_id: str = "", timeout: int = 0, kind: str = "process",
-                      env: dict | None = None) -> Task:
-        task = Task(uuid.uuid4().hex, title, program, list(args), serial, command_id, kind)
+                      env: dict | None = None, *, source: str = "") -> Task:
+        task = Task(uuid.uuid4().hex, title, program, list(args), serial, command_id, kind, source=source)
         self._register(task)
         QTimer.singleShot(0, lambda: self._spawn(task, timeout, env))
         return task
@@ -816,14 +850,15 @@ class TaskRunner(QObject):
         if not self._active_ids:
             self._timer.stop()
             self._flush_timer.stop()
+        recorded = not task.transient and task.source in HISTORY_SOURCES
         if task.transient:
             self._transient_finished.append(task.id)
-        else:
+        elif recorded:
             self.history.append(task)
-            self.history = self.history[-200:]
+            self.history = self.history[-HISTORY_LIMIT:]
             self._save_history()
         self.task_changed.emit(task)
-        if not task.transient:
+        if recorded:
             self.history_changed.emit()
         self.task_finished.emit(task)
         if task.transient:
@@ -850,28 +885,86 @@ class TaskRunner(QObject):
         self._transient_finished = retained
 
     def _save_history(self) -> None:
+        """Coalesce completions; the file is written later on a worker thread."""
         if not self._history_writable:
             return
+        self._history_dirty = True
+        self._history_timer.start()
+
+    @staticmethod
+    def _history_records(history: list[Task]) -> list[dict]:
+        records = []
+        for task in history:
+            record = asdict(task)
+            record["stdout"] = _truncate_tail(task.stdout, HISTORY_OUTPUT_LIMIT, HISTORY_TRUNCATED)
+            record["stderr"] = _truncate_tail(task.stderr, HISTORY_OUTPUT_LIMIT, HISTORY_TRUNCATED)
+            records.append(record)
+        return records
+
+    def _snapshot_history(self) -> tuple[int, list[dict]]:
+        self._history_dirty = False
+        self._history_sequence += 1
+        return self._history_sequence, self._history_records(self.history)
+
+    def _write_history_async(self) -> None:
+        if not self._history_dirty or not self._history_writable:
+            return
+        sequence, records = self._snapshot_history()
+
+        def work() -> None:
+            try:
+                self._commit_history(sequence, records)
+            except (OSError, ValueError) as exc:
+                self._history_failed.emit(str(exc))
+
+        self._history_thread = threading.Thread(target=work, name="history-writer", daemon=True)
+        self._history_thread.start()
+
+    def flush_history(self) -> None:
+        """Write any pending history now (used on exit and by tests)."""
+        self._history_timer.stop()
+        thread = self._history_thread
+        if thread is not None:
+            thread.join(10)
+        if not self._history_dirty or not self._history_writable:
+            return
+        sequence, records = self._snapshot_history()
         try:
-            self._write_history(self.history)
+            self._commit_history(sequence, records)
         except (OSError, ValueError) as exc:
             self.error.emit(f"无法保存执行历史：{exc}")
 
+    def _commit_history(self, sequence: int, records: list[dict]) -> None:
+        payload = json.dumps(records, ensure_ascii=False, indent=2)
+        with self._history_lock:
+            if sequence <= self._history_written:
+                return  # a newer snapshot already reached the disk
+            temporary = self._history_path.with_suffix(".tmp")
+            try:
+                self._history_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary.write_text(payload, encoding="utf-8")
+                temporary.replace(self._history_path)
+            except (OSError, ValueError):
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise
+            self._history_written = sequence
+
     def _write_history(self, history: list[Task]) -> None:
+        """Synchronous write for explicit user actions, which must report failure."""
         if not self._history_writable:
             raise ValueError(f"无法修改执行历史：{self._history_path} 读取失败，原文件保留，不会覆盖。")
-        temporary = self._history_path.with_suffix(".tmp")
+        self._history_timer.stop()
+        self._history_sequence += 1
         try:
-            self._history_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary.write_text(json.dumps([asdict(task) for task in history],
-                                            ensure_ascii=False, indent=2), encoding="utf-8")
-            temporary.replace(self._history_path)
+            self._commit_history(self._history_sequence, self._history_records(history))
         except (OSError, ValueError):
-            try:
-                temporary.unlink(missing_ok=True)
-            except OSError:
-                pass
+            if self._history_dirty:
+                self._history_timer.start()
             raise
+        self._history_dirty = False
 
     def clear_history(self, kind: str) -> None:
         if not self._history_writable:

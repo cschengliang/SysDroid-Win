@@ -241,3 +241,39 @@ def test_terminal_arguments_escape_semicolons(runner, monkeypatch):
     assert "evil\\;new-tab cmd" in args and "ADB · evil\\;new-tab cmd" in args
     assert all(";" not in arg.replace("\\;", "") for arg in args)
     assert windows_terminal_arg("a;b;c") == "a\\;b\\;c"
+
+
+def test_internal_tasks_are_not_persisted_and_history_writes_are_debounced(runner, qtbot):
+    internal = runner.start_adb("getprop", ["devices"])
+    runner.cancel(internal.id)
+    command = runner.start_adb("library", ["devices"], source="command")
+    runner._receive_output(command.id, "stdout", "x" * (backend.HISTORY_OUTPUT_LIMIT * 3) + "尾部")
+    runner.cancel(command.id)
+    assert runner.history == [command] and command.stdout.endswith("尾部")
+    assert not runner._history_path.exists()  # nothing written synchronously on the UI thread
+    qtbot.waitUntil(runner._history_path.exists, timeout=3000)
+    if runner._history_thread is not None:
+        runner._history_thread.join(5)
+    records = json.loads(runner._history_path.read_text(encoding="utf-8"))
+    assert [record["id"] for record in records] == [command.id]
+    assert len(records[0]["stdout"]) <= backend.HISTORY_OUTPUT_LIMIT and records[0]["stdout"].endswith("尾部")
+    assert backend.HISTORY_TRUNCATED in records[0]["stdout"] and records[0]["source"] == "command"
+    assert len(command.stdout) > backend.HISTORY_OUTPUT_LIMIT  # the live task keeps its full output
+
+
+def test_legacy_history_keeps_only_command_library_records(runner):
+    base = {"program": "adb", "args": [], "status": "succeeded"}
+    runner._history_path.write_text(json.dumps([
+        {**base, "id": "lib", "title": "命令", "command_id": "devices", "stdout": "y" * 200000},
+        {**base, "id": "internal", "title": "读取属性"},
+    ]), encoding="utf-8")
+    restored = TaskRunner(runner)
+    assert [task.id for task in restored.history] == ["lib"]
+    assert restored.history[0].source == "command"
+    assert len(restored.history[0].stdout) <= backend.HISTORY_OUTPUT_LIMIT
+
+
+def test_newer_history_snapshot_is_never_overwritten_by_an_older_one(runner):
+    runner._commit_history(5, [{"id": "new"}])
+    runner._commit_history(4, [{"id": "old"}])
+    assert json.loads(runner._history_path.read_text(encoding="utf-8")) == [{"id": "new"}]

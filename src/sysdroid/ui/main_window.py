@@ -912,5 +912,6 @@ class AndroidToolboxWindow(QMainWindow):
             return
         for page in self._device_pages.values():
             page.set_active(False)
+        self.runner.flush_history()
         self._save_workspace()
         event.accept()
