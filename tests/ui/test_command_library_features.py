@@ -52,3 +52,28 @@ def test_import_of_broken_file_reports_and_keeps_library(page, monkeypatch, tmp_
     before = dict(page.store.commands)
     assert not page.import_commands()
     assert errors and "无法读取" in errors[0] and page.store.commands == before
+
+
+class FakeTask:
+    id = "fake"
+
+
+def test_execution_dialog_remembers_last_parameters(page, runner, monkeypatch):
+    started = []
+    monkeypatch.setattr(runner, "start_adb", lambda title, args, **kwargs: started.append(args) or FakeTask())
+    page.set_device("SER", "device")
+    page.open_execution("props")
+    dialog = page.execution_dialog
+    field = dialog.fields[0, "key"]
+    assert field.text() == ""
+    field.setText("ro.build.fingerprint")
+    assert dialog.run_button.isEnabled()
+    dialog._submit()
+    assert started == [["shell", "getprop ro.build.fingerprint"]]
+    page._close_dialog(dialog)
+    fresh = CommandLibraryPage(runner)
+    fresh.set_device("SER", "device")
+    fresh.open_execution("props")
+    assert fresh.execution_dialog.fields[0, "key"].text() == "ro.build.fingerprint"
+    assert fresh.execution_dialog.run_button.isEnabled()
+    fresh.execution_dialog.reject()

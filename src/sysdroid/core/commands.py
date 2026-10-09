@@ -426,3 +426,46 @@ class CommandStore:
                 backup.rename(self.path)
             raise
         return backup
+
+
+class ParameterMemory:
+    """Last-used parameter values per command, stored beside the library.
+
+    Best effort: an unreadable file starts empty and write failures are
+    reported to the caller without touching the command library.
+    """
+    LIMIT = 200
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = Path(path) if path is not None else DATA_DIR / "command_params.json"
+        self.values: dict[str, dict[str, str]] = {}
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if isinstance(payload, dict):
+            for command_id, values in payload.items():
+                if isinstance(command_id, str) and isinstance(values, dict):
+                    clean = {key: value for key, value in values.items() if isinstance(key, str) and isinstance(value, str)}
+                    if clean:
+                        self.values[command_id] = clean
+
+    def get(self, command_id: str) -> dict[str, str]:
+        return dict(self.values.get(command_id, {}))
+
+    def remember(self, command_id: str, values: Mapping[str, str]) -> None:
+        clean = {key: value for key, value in values.items() if value}
+        if not clean or self.values.get(command_id) == clean:
+            return
+        self.values.pop(command_id, None)
+        self.values[command_id] = clean
+        while len(self.values) > self.LIMIT:
+            self.values.pop(next(iter(self.values)))
+        temporary = self.path.with_name(self.path.name + "." + uuid.uuid4().hex + ".tmp")
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary.write_text(json.dumps(self.values, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.replace(self.path)
+        except OSError as exc:
+            temporary.unlink(missing_ok=True)
+            raise StorageError(f"无法保存参数记录 {self.path}：{exc}") from exc

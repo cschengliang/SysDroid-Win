@@ -459,3 +459,20 @@ def test_import_rejects_invalid_payload_without_saving(tmp_path):
     with pytest.raises(ValueError, match="工作流"):
         store.import_payload(dangling)
     assert store.commands == before and not (tmp_path / "c.json").exists()
+
+
+def test_parameter_memory_persists_latest_values_and_tolerates_bad_files(tmp_path):
+    from sysdroid.core.commands import ParameterMemory
+    path = tmp_path / "params.json"
+    memory = ParameterMemory(path)
+    memory.remember("props", {"key": "ro.build.id", "empty": ""})
+    assert ParameterMemory(path).get("props") == {"key": "ro.build.id"}
+    path.write_text('{"props": {"key": 5}, "x": "bad", "ok": {"a": "b"}}', encoding="utf-8")
+    assert ParameterMemory(path).values == {"ok": {"a": "b"}}
+    path.write_text("not json", encoding="utf-8")
+    assert ParameterMemory(path).values == {}
+    memory = ParameterMemory(path)
+    memory.LIMIT = 2
+    for index in range(3):
+        memory.remember(f"c{index}", {"v": str(index)})
+    assert list(ParameterMemory(path).values) == ["c1", "c2"]

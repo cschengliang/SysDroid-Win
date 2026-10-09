@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from sysdroid.core.backend import STATUS_LABELS, TERMINAL_STATUSES, Task, TaskRunner, powershell_command
 from sysdroid.core.commands import (
-    CATEGORIES, EXECUTION_TYPES, Command, CommandStore, PreparedCommand, StorageError,
+    CATEGORIES, EXECUTION_TYPES, Command, CommandStore, ParameterMemory, PreparedCommand, StorageError,
     is_remote_shell, parse_payload, prepare_command, variable_names,
 )
 from sysdroid.ui import kit as ui_kit
@@ -133,10 +133,13 @@ class ExecutionDialog(QDialog):
             form.addRow(_note(f"执行类型：{EXECUTION_TYPES[command.execution_type]}"))
             remote = is_remote_shell(command)
             has_remote |= remote
+            remembered = self.page.parameters.get(command.id)
             for name in variable_names(command.template):
-                field = QLineEdit()
+                field = QLineEdit(remembered.get(name, ""))
                 field.setObjectName(f"parameter_{index}_{name}")
                 field.setPlaceholderText("原样传递值；无需再加引号")
+                if name in remembered:
+                    field.setToolTip("已填入上次执行时使用的值")
                 field.textChanged.connect(self.update_preview)
                 self.fields[index, name] = field
                 label = f"{name}（Android 远程 Shell 脚本，不是普通数据）" if remote else name
@@ -189,11 +192,18 @@ class ExecutionDialog(QDialog):
         if not self.run_button.isEnabled():
             return
         plan = list(self.prepared)
+        commands = self._selected_commands()
         root_names = [step.title for step in plan if step.permission == "root"]
         if root_names:
             answer = QMessageBox.warning(self, "需要 Root · 明确确认", "以下命令标记为需要 Root：\n" + "\n".join(root_names) + "\n\n此标记不是权限检测；程序不会自动执行 adb root / su，也不保证设备已有 Root。仍按预览原样执行？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
             if answer != QMessageBox.StandardButton.Yes:
                 return
+        for index, command in enumerate(commands):
+            values = {name: field.text() for (step, name), field in self.fields.items() if step == index}
+            try:
+                self.page.parameters.remember(command.id, values)
+            except StorageError:
+                pass  # Best effort; execution must not depend on the memory file.
         self.submitted.emit(plan)
         self.accept()
 
@@ -208,6 +218,7 @@ class CommandLibraryPage(QWidget):
         self.device_state = ""
         self.runtime_error = ""
         self.store = CommandStore()
+        self.parameters = ParameterMemory()
         self.editing_id: str | None = None
         self.execution_dialog: ExecutionDialog | None = None
         self._latest: dict[str, Task] = {}
