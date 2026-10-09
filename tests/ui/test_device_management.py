@@ -233,3 +233,54 @@ def test_status_card_shows_batched_device_facts(window, qtbot):
     window._refresh_devices()
     answer_devices(window, qtbot)
     assert window.device_facts["battery"].text() == "电量：—"
+
+
+def test_pairing_runs_adb_pair_and_prefills_the_connect_host(window, qtbot, monkeypatch):
+    monkeypatch.setattr(window, "_ask_pairing", lambda address="": ("192.168.1.23:41913", "123456"))
+    window._pair_wireless()
+    pair = pending(window, lambda task: task.args[:1] == ["pair"])[-1]
+    assert pair.args == ["pair", "192.168.1.23:41913", "123456"]
+    finish(window, pair, "Successfully paired to 192.168.1.23:41913 [guid=adb-XYZ]\n")
+    assert window.address_input.text() == "192.168.1.23:"
+    assert "配对成功" in window.connection_note.text()
+    assert pending(window, lambda task: task.args[:1] == ["devices"])
+
+    monkeypatch.setattr(window, "_ask_pairing", lambda address="": None)
+    count = len(window.started)
+    window._pair_wireless()
+    assert len(window.started) == count
+
+
+def test_failed_pairing_is_reported(window, qtbot, monkeypatch):
+    monkeypatch.setattr(window, "_ask_pairing", lambda address="": ("192.168.1.23:41913", "000000"))
+    window._pair_wireless()
+    pair = pending(window, lambda task: task.args[:1] == ["pair"])[-1]
+    finish(window, pair, "Failed: Wrong password or connection was dropped.\n")
+    assert "配对失败" in window.connection_note.text()
+
+
+def test_mdns_discovery_connects_or_pairs_the_chosen_service(window, qtbot, monkeypatch):
+    output = ("List of discovered mdns services\n"
+              "adb-ABC\t_adb-tls-connect._tcp\t192.168.1.23:37255\n"
+              "adb-ABC\t_adb-tls-pairing._tcp\t192.168.1.23:41913\n")
+    chosen = []
+    monkeypatch.setattr(window, "_choose_mdns_service", lambda services: chosen.append(services) or services[0])
+    window._discover_mdns()
+    query = pending(window, lambda task: task.args == ["mdns", "services"])[-1]
+    finish(window, query, output)
+    assert len(chosen[0]) == 2 and window.address_input.text() == "192.168.1.23:37255"
+    assert pending(window, lambda task: task.args == ["connect", "192.168.1.23:37255"])
+
+    asked = []
+    monkeypatch.setattr(window, "_choose_mdns_service", lambda services: services[1])
+    monkeypatch.setattr(window, "_ask_pairing", lambda address="": asked.append(address))
+    window._discover_mdns()
+    finish(window, pending(window, lambda task: task.args == ["mdns", "services"])[-1], output)
+    assert asked == ["192.168.1.23:41913"]
+
+    window._discover_mdns()
+    finish(window, pending(window, lambda task: task.args == ["mdns", "services"])[-1], "List of discovered mdns services\n")
+    assert "未发现" in window.connection_note.text()
+    window._discover_mdns()
+    finish(window, pending(window, lambda task: task.args == ["mdns", "services"])[-1], "", "failed", "adb: unknown command mdns")
+    assert "不支持 mDNS" in window.connection_note.text()

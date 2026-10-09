@@ -1,4 +1,4 @@
-"""Batched device status query and parsing (pure, no Qt)."""
+"""Device status batching and wireless-debugging helpers (pure, no Qt)."""
 from __future__ import annotations
 
 import re
@@ -124,3 +124,43 @@ def parse_device_status(stdout: str) -> DeviceStatus:
         battery=format_battery(sections.get("battery", [])), ip=format_ip(sections.get("ip", [])),
         mounts=[line for line in mounts if line.strip()],
     )
+
+
+@dataclass(frozen=True)
+class MdnsService:
+    name: str
+    kind: str
+    address: str
+
+    @property
+    def pairing(self) -> bool:
+        return "pairing" in self.kind
+
+    @property
+    def label(self) -> str:
+        role = "配对" if self.pairing else "连接"
+        return f"{role} · {self.address} · {self.name}"
+
+
+def parse_mdns_services(stdout: str) -> list[MdnsService]:
+    """Parse ``adb mdns services``; ignores the header and unrelated lines."""
+    services: list[MdnsService] = []
+    for line in stdout.splitlines():
+        match = re.match(r"^(\S+)\s+(_adb[\w-]*\._tcp)\.?\s+(\S+:\d+)\s*$", line.strip())
+        if match:
+            service = MdnsService(match[1], match[2], match[3])
+            if service not in services:
+                services.append(service)
+    return services
+
+
+ADDRESS = re.compile(r"(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+):\d{1,5}")
+
+
+def validate_pairing(address: str, code: str) -> tuple[str, str]:
+    address, code = address.strip(), code.strip()
+    if not ADDRESS.fullmatch(address) or not 0 < int(address.rsplit(":", 1)[1]) < 65536:
+        raise ValueError("请输入“无线调试 → 使用配对码配对设备”中显示的 IP:端口")
+    if not re.fullmatch(r"\d{6}", code):
+        raise ValueError("配对码应为 6 位数字")
+    return address, code

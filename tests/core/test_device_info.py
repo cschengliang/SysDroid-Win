@@ -1,7 +1,7 @@
 import pytest
 
 from sysdroid.core.device_info import (
-    STATUS_SCRIPT, parse_device_status,
+    STATUS_SCRIPT, parse_device_status, parse_mdns_services, validate_pairing,
 )
 
 FULL = """0
@@ -63,3 +63,33 @@ def test_missing_blocks_degrade_to_empty_and_legacy_layout_still_works():
     assert legacy.system_writable and legacy.abi == ""
     with pytest.raises(ValueError):
         parse_device_status("0\n1")
+
+
+def test_mdns_services_parse_connect_and_pairing_entries():
+    output = """List of discovered mdns services
+adb-1A2B3C-xyz\t_adb-tls-connect._tcp\t192.168.1.23:37255
+adb-1A2B3C-xyz\t_adb-tls-pairing._tcp.\t192.168.1.23:41913
+adb-1A2B3C-xyz\t_adb-tls-connect._tcp\t192.168.1.23:37255
+garbage line
+"""
+    services = parse_mdns_services(output)
+    assert [(service.kind, service.address, service.pairing) for service in services] == [
+        ("_adb-tls-connect._tcp", "192.168.1.23:37255", False),
+        ("_adb-tls-pairing._tcp", "192.168.1.23:41913", True),
+    ]
+    assert services[1].label.startswith("配对 · 192.168.1.23:41913")
+    assert parse_mdns_services("List of discovered mdns services\n") == []
+
+
+@pytest.mark.parametrize("address,code,ok", [
+    ("192.168.1.23:41913", "123456", True), (" phone.local:5555 ", " 000111 ", True),
+    ("192.168.1.23", "123456", False), ("192.168.1.23:0", "123456", False),
+    ("192.168.1.23:41913", "12345", False), ("192.168.1.23:41913", "12 456", False),
+    ("a b:1", "123456", False),
+])
+def test_pairing_input_validation(address, code, ok):
+    if ok:
+        assert validate_pairing(address, code) == (address.strip(), code.strip())
+    else:
+        with pytest.raises(ValueError):
+            validate_pairing(address, code)
