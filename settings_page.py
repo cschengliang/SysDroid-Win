@@ -225,7 +225,8 @@ class SettingsPage(QWidget):
         self.delete_button.clicked.connect(self._delete)
         change_row.addWidget(self.delete_button)
         editor_layout.addLayout(change_row)
-        editor_layout.addWidget(_note(
+        editor_layout.addWidget(ui_kit.info_note(
+            "写入前先读取最新值，提交后核对实际值；不自动提权。",
             "修改前先读取最新目标，确认后提交并核对实际值。权限由设备决定，"
             "不自动 Root/su、不重置 namespace、不修改数据库文件。"
             "列表和当前值是读取快照，并非持续同步；空字符串、文本 null 与不存在不同。"))

@@ -381,7 +381,7 @@ class CommandLibraryPage(QWidget):
     def _build_command_management(self) -> None:
         page = QWidget()
         layout = ui_kit.tab_layout(QVBoxLayout(page))
-        layout.addWidget(_note("管理全部已保存命令。取消显示不会删除命令；隐藏命令需先启用显示才能执行。这不是权限控制，也不会取消已提交的任务。"))
+        layout.addWidget(ui_kit.info_note("取消显示不会删除命令，也不是权限控制。", "管理全部已保存命令。取消显示不会删除命令；隐藏命令需先启用显示才能执行。这不是权限控制，也不会取消已提交的任务。"))
         self.management_search = QLineEdit()
         self.management_search.setObjectName("commandManagementSearch")
         self.management_search.setPlaceholderText("搜索名称、描述、标签或模板")
@@ -417,7 +417,7 @@ class CommandLibraryPage(QWidget):
         page = QWidget()
         layout = ui_kit.tab_layout(QVBoxLayout(page))
         toolbar = QHBoxLayout()
-        toolbar.addWidget(_note("来自真实任务执行器；包含运行中的任务。清空仅删除已结束的 ADB 执行历史，不停止任务，也不清除当前会话的任务输出。"), 1)
+        toolbar.addWidget(ui_kit.info_note("清空只删除已结束的执行历史，不会停止任务。", "来自真实任务执行器；包含运行中的任务。清空仅删除已结束的 ADB 执行历史，不停止任务，也不清除当前会话的任务输出。"), 1)
         self.history_output_button = _button("查看所选输出", self._show_history_output, toolbar)
         self.history_output_button.setEnabled(False)
         self.clear_history_button = _button("清空历史", self._clear_history, toolbar)

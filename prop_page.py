@@ -249,7 +249,8 @@ class PropPage(QWidget):
         self.write_button.clicked.connect(self._write)
         actions.addWidget(self.write_button)
         editor_layout.addLayout(actions)
-        editor_layout.addWidget(_note(
+        editor_layout.addWidget(ui_kit.info_note(
+            "前缀只是惯例，不保证权限；仅使用 getprop / setprop，不自动提权。",
             "ro.* 通常只读；persist.* 是持久化前缀；其他为普通属性。"
             "实际写入权限和持久化行为取决于设备，前缀不是权限保证。"
             "任何属性都可能影响系统服务。仅使用 getprop / setprop，"

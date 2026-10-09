@@ -230,7 +230,7 @@ class ProcessPage(QWidget):
         self.details_output_button = QPushButton("详情完整任务输出")
         self.details_output_button.clicked.connect(self._open_details_output)
         detail_layout.addWidget(self.details_output_button)
-        detail_layout.addWidget(_note("RSS 与 PSS / SwapPss 分别展示。AM 启动字段只取同 PID + 数值 UID 的真实记录；未提供时不推断启动来源。不提权、不结束进程。"))
+        detail_layout.addWidget(ui_kit.info_note("只读：不提权、不结束进程；RSS 与 PSS 分开展示。", "RSS 与 PSS / SwapPss 分别展示。AM 启动字段只取同 PID + 数值 UID 的真实记录；未提供时不推断启动来源。不提权、不结束进程。"))
         detail_scroll.setWidget(group)
         self.splitter.addWidget(detail_scroll)
         self.splitter.setStretchFactor(0, 3)
