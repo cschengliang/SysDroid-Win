@@ -1,3 +1,4 @@
+import re
 import shlex
 from pathlib import Path
 
@@ -11,10 +12,15 @@ from sysdroid.core.apks import PackageController, parse_package_dump, parse_pack
 class Runner(QObject):
     task_added = Signal(object)
     task_finished = Signal(object)
+    task_output = Signal(str, str, str)
 
     def __init__(self):
         super().__init__()
         self.requests = []
+        self.cancelled = []
+
+    def cancel(self, task_id, force=False):
+        self.cancelled.append(task_id)
 
     def start_adb(self, title, args, serial='', command_id='', timeout=10):
         task = Task(str(len(self.requests)), title, 'adb', list(args), serial, command_id)
@@ -53,12 +59,21 @@ def ready(qapp):
     return runner, controller
 
 
-def complete_list(runner, members='package:com.example.app\n', system='', disabled=''):
+def list_frame(runner, members='package:com.example.app\n', system='', disabled='', enriched=None, rcs=None):
+    script = shlex.split(runner.requests[-1].args[1])[2]
+    nonce = re.search(r'(?m)^nonce=(\w+)$', script)[1]
+    sections = [('members', members), ('system', system), ('disabled', disabled)]
+    if enriched is not None:
+        sections.append(('enriched', enriched))
+    rcs = rcs or {}
+    return (f'FRAME {nonce}\n' + ''.join(f'BEGIN {nonce} {name}\n{text}\nEND {nonce} {name} {rcs.get(name, 0)}\n'
+                                          for name, text in sections) + f'DONE {nonce}\n')
+
+
+def complete_list(runner, members='package:com.example.app\n', system='', disabled='', enriched=None, rcs=None):
     if shlex.split(runner.requests[-1].args[1]) == ['pm', 'help']:
         runner.finish('list packages [--user USER_ID]\n')
-    runner.finish(members)
-    runner.finish(system)
-    runner.finish(disabled)
+    runner.finish(list_frame(runner, members, system, disabled, enriched, rcs))
 
 
 def test_rich_package_records_preserve_paths_numeric_versions_and_unknowns():
@@ -108,8 +123,14 @@ def test_failed_required_list_preserves_last_complete_snapshot(ready):
     complete_list(runner)
     old = controller.packages
     controller.refresh()
-    runner.finish('package:other.app\n')
-    runner.finish('SecurityException: denied\n')
+    assert len(runner.requests) == 3  # pm help is cached; the lists are one round trip
+    runner.finish(list_frame(runner, 'package:other.app\n', 'SecurityException: denied\n'))
+    assert controller.packages == old and controller.error and not controller.busy
+    controller.refresh()
+    runner.finish(list_frame(runner, rcs={'disabled': 1}))
+    assert controller.packages == old and 'disabled' in controller.error
+    controller.refresh()
+    runner.finish(list_frame(runner)[:-20])
     assert controller.packages == old and controller.error and not controller.busy
 
 
@@ -259,10 +280,9 @@ def test_page_version_sorting_and_filter_keep_selected_package(qapp):
     runner.finish('Users:\n\tUserInfo{10:Work:10} running\n')
     runner.finish('10\n')
     runner.finish('list packages [-f] [-i] [-U] [--show-versioncode] [--user USER_ID]\n')
-    runner.finish('package:com.example.app\npackage:other.app\n')
-    runner.finish('')
-    runner.finish('')
-    runner.finish('package:com.example.app uid:12 versionCode:100\npackage:other.app uid:2 versionCode:9\n')
+    assert shlex.split(runner.requests[-1].args[1])[2].count('pm list packages') == 4
+    runner.finish(list_frame(runner, 'package:com.example.app\npackage:other.app\n',
+                             enriched='package:com.example.app uid:12 versionCode:100\npackage:other.app uid:2 versionCode:9\n'))
     page.table.sortItems(2, Qt.SortOrder.AscendingOrder)
     assert page.table.item(0, 0).text() == 'other.app'
     page.table.selectRow(1)
@@ -366,3 +386,34 @@ def test_stopped_split_export_preserves_partial_and_submits_no_next_pull(ready, 
     assert len(runner.requests) == count
     assert part.read_bytes() == b'partial APK' and not part.with_suffix('').exists()
     assert controller.error and not controller.busy
+
+
+# --- PR 2: batched lists, install progress, page actions --------------------
+
+def test_list_script_runs_every_query_in_one_framed_round_trip():
+    from sysdroid.core.apks import list_script, parse_list_batch
+    script = list_script('abc', 10, ['-f', '-U'])
+    assert script.count('pm list packages --user 10') == 4
+    assert "rc=$?" in script and 'DONE' in script
+    with pytest.raises(ValueError):
+        parse_list_batch('FRAME abc\nBEGIN abc members\n\nEND abc members 0\nDONE abc\n', 'abc')
+    with pytest.raises(ValueError):
+        parse_list_batch('FRAME abc\nBEGIN abc rogue\n\nEND abc rogue 0\nDONE abc\n', 'abc')
+
+
+def test_install_streams_progress_from_the_adb_binary_output(ready, tmp_path):
+    runner, controller = ready
+    seen = []
+    controller.install_progress.connect(lambda line, percent: seen.append((line, percent)))
+    apk = tmp_path / 'app.apk'
+    apk.write_bytes(b'apk')
+    task = controller.install([apk])
+    assert task.args[0] == 'install' and task.args[-1] == str(apk.resolve())
+    runner.task_output.emit(task.id, 'stdout', 'Performing Streamed Install\n')
+    runner.task_output.emit(task.id, 'stdout', '[ 42%] /data/local/tmp/app.apk\r')
+    runner.task_output.emit('other', 'stdout', '[ 99%] unrelated\n')
+    assert seen[0] == ('Performing Streamed Install', -1)
+    assert seen[-1] == ('[ 42%] /data/local/tmp/app.apk', 42)
+    runner.finish('Performing Streamed Install\nSuccess\n')
+    complete_list(runner)
+    assert controller.status.startswith('安装命令成功') and not controller.busy
