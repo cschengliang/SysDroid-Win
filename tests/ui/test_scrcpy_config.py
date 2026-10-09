@@ -1,6 +1,11 @@
 import pytest
 
-from sysdroid.ui.pages.scrcpy_page import ScrcpyConfig, build_scrcpy_args, parse_encoder_list, validate_recording_path
+from datetime import datetime
+
+from sysdroid.ui.pages.scrcpy_page import (
+    ScrcpyConfig, ScrcpyPage, build_scrcpy_args, config_from_dict, config_to_dict, parse_encoder_list,
+    timestamped_recording_path, validate_recording_path,
+)
 
 
 def test_record_only_suppresses_control_and_display_but_preserves_literal_path():
@@ -119,3 +124,54 @@ def test_control_dependent_options_follow_scrcpy_control_rules():
     record_only = build_scrcpy_args("serial", ScrcpyConfig(record_enabled=True, record_mode="only", record_path="x.mp4", **options))
     assert "--turn-screen-off" in record_only and "--start-app=com.example" in record_only
     assert "--keyboard=uhid" not in record_only
+
+
+def test_config_round_trip_ignores_unknown_and_mistyped_values():
+    config = ScrcpyConfig(max_size=720, video_source="camera", camera_facing="front", stay_awake=True, crop="")
+    assert config_from_dict(config_to_dict(config)) == config
+    restored = config_from_dict({"max_size": "720", "audio_enabled": 1, "display_id": True, "unknown": 5, "start_app": "com.a"})
+    assert restored == ScrcpyConfig(start_app="com.a")
+    assert config_from_dict(["not", "a", "dict"]) == ScrcpyConfig()
+
+
+def test_timestamped_recording_path_adds_sanitized_serial_and_time(tmp_path):
+    now = datetime(2026, 10, 9, 21, 30, 5)
+    path = timestamped_recording_path(str(tmp_path / "screen.mkv"), "192.168.1.5:5555", now)
+    assert path == str(tmp_path / "screen-192.168.1.5_5555-20261009-213005.mkv")
+
+
+def test_page_persists_config_and_restores_it(runner, tmp_path):
+    config_path = tmp_path / "scrcpy.json"
+    page = ScrcpyPage(runner, config_path=config_path)
+    assert not config_path.exists()
+    page.max_size.setCurrentIndex(page.max_size.findData(720))
+    page.show_touches.setChecked(True)
+    page.start_app.setText("com.android.settings")
+    page.video_source.setCurrentIndex(page.video_source.findData("camera"))
+    assert page._save_timer.isActive()
+    assert page.save_config() and config_path.exists()
+    restored = ScrcpyPage(runner, config_path=config_path)
+    config = restored.current_config()
+    assert (config.max_size, config.show_touches, config.start_app, config.video_source) == (720, True, "com.android.settings", "camera")
+    assert restored.profile.currentData() == "custom"
+    assert not restored._save_timer.isActive()
+    config_path.write_text("{broken", encoding="utf-8")
+    assert ScrcpyPage(runner, config_path=config_path).current_config().max_size == 1080
+
+
+def test_start_session_uses_timestamped_recording_path(runner, tmp_path, monkeypatch):
+    page = ScrcpyPage(runner)
+    started = []
+
+    class FakeTask:
+        id, status, serial, exit_code, stdout, stderr = "t1", "running", "SER:1", None, "", ""
+
+    monkeypatch.setattr(page, "detect_tools", lambda: True)
+    monkeypatch.setattr(runner, "start_process", lambda title, program, args, **kw: started.append(args) or FakeTask())
+    page.now = lambda: datetime(2026, 1, 2, 3, 4, 5)
+    page.set_device("SER:1", "device", "Pixel")
+    page.record_enabled.setChecked(True)
+    page.record_path.setText(str(tmp_path / "cap.mp4"))
+    assert page.start_session() is not None
+    assert "--record=" + str(tmp_path / "cap-SER_1-20260102-030405.mp4") in started[0]
+    assert page.record_path.text() == str(tmp_path / "cap.mp4")

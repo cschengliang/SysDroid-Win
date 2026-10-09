@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields, replace
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QStandardPaths, QTimer, Signal
@@ -63,6 +65,7 @@ class ScrcpyConfig:
     stay_awake: bool = False
     show_touches: bool = False
     keyboard_uhid: bool = False
+    record_timestamp: bool = True
 
     @property
     def record_only(self) -> bool:
@@ -171,6 +174,32 @@ def build_scrcpy_args(serial: str, config: ScrcpyConfig) -> list[str]:
     return args
 
 
+def config_to_dict(config: ScrcpyConfig) -> dict[str, object]:
+    return asdict(config)
+
+
+def config_from_dict(data: object) -> ScrcpyConfig:
+    """Rebuild a config from saved JSON, keeping defaults for unknown or mistyped values."""
+    if not isinstance(data, dict):
+        return ScrcpyConfig()
+    defaults = ScrcpyConfig()
+    values: dict[str, object] = {}
+    for field in fields(ScrcpyConfig):
+        value = data.get(field.name)
+        default = getattr(defaults, field.name)
+        # bool is a subclass of int, so compare exact types.
+        if type(value) is type(default):
+            values[field.name] = value
+    return replace(defaults, **values)
+
+
+def timestamped_recording_path(filename: str, serial: str, now: datetime) -> str:
+    """Append the device and start time so sessions never overwrite each other."""
+    path = Path(filename)
+    device = re.sub(r"[^A-Za-z0-9._-]+", "_", serial).strip("_.") or "device"
+    return str(path.with_name(f"{path.stem}-{device}-{now:%Y%m%d-%H%M%S}{path.suffix}"))
+
+
 def validate_recording_path(filename: str) -> Path:
     """Check an output location without creating or truncating the recording."""
     if not filename.strip() or "\0" in filename:
@@ -238,11 +267,19 @@ class ScrcpyPage(QWidget):
     COMBO_FIELDS = ("max_size", "max_fps", "video_codec", "orientation", "audio_source", "record_format", "record_mode", "video_source", "camera_facing")
     SPIN_FIELDS = ("video_bitrate", "video_buffer", "audio_bitrate", "audio_buffer", "display_id")
     CHECK_FIELDS = ("audio_enabled", "control_enabled", "clipboard_sync", "always_on_top", "fullscreen", "borderless", "record_enabled",
-                    "new_display", "turn_screen_off", "stay_awake", "show_touches", "keyboard_uhid")
+                    "new_display", "turn_screen_off", "stay_awake", "show_touches", "keyboard_uhid", "record_timestamp")
 
-    def __init__(self, runner: TaskRunner, parent: QWidget | None = None) -> None:
+    def __init__(self, runner: TaskRunner, parent: QWidget | None = None, *, config_path: Path | None = None) -> None:
         super().__init__(parent)
         self.runner = runner
+        self.config_path = config_path
+        self.now = datetime.now
+        self._loading = True
+        self._saved_config: dict[str, object] | None = None
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(400)
+        self._save_timer.timeout.connect(self.save_config)
         self._serial = ""
         self._state = ""
         self._model = ""
@@ -270,6 +307,10 @@ class ScrcpyPage(QWidget):
         self.runner.task_finished.connect(self._task_finished)
         self.runner.task_output.connect(self._task_output)
         self.reset_defaults()
+        self.load_config()
+        # Only explicit changes are written; untouched defaults leave no file behind.
+        self._saved_config = self._config_snapshot()
+        self._loading = False
         self.detect_tools()
         self.set_device("")
 
@@ -464,6 +505,9 @@ class ScrcpyPage(QWidget):
         record_form.addRow("输出文件", path_widget)
         record_form.addRow("封装格式", self.record_format)
         record_form.addRow("录制模式", self.record_mode)
+        self.record_timestamp = QCheckBox("文件名追加设备序列号和启动时间")
+        self.record_timestamp.setToolTip("例如 screen-SERIAL-20261009-213000.mp4；多台设备同时录制时不会互相覆盖。")
+        record_form.addRow("", self.record_timestamp)
         record_layout.addWidget(self.record_settings)
         record_layout.addWidget(ui_kit.info_note("启动前检查目录可写并确认覆盖；强制结束可能损坏录制文件。", "支持包含空格、单引号和 $ 的文件名。启动前检查目录可写并确认覆盖现有文件；不会创建目录。正常结束有助于完成文件封装，强制结束可能损坏录制。相对路径基于应用当前工作目录。"))
         record_layout.addStretch()
@@ -563,7 +607,8 @@ class ScrcpyPage(QWidget):
         for widget in (self.audio_bitrate, self.audio_buffer, self.display_id):
             widget.valueChanged.connect(self._config_changed)
         for widget in (self.control_enabled, self.clipboard_sync, self.always_on_top, self.fullscreen, self.borderless, self.record_enabled,
-                       self.new_display, self.turn_screen_off, self.stay_awake, self.show_touches, self.keyboard_uhid):
+                       self.new_display, self.turn_screen_off, self.stay_awake, self.show_touches, self.keyboard_uhid,
+                       self.record_timestamp):
             widget.toggled.connect(self._config_changed)
         for widget in (self.record_path, self.new_display_spec, self.crop, self.start_app):
             widget.textChanged.connect(self._config_changed)
@@ -683,6 +728,7 @@ class ScrcpyPage(QWidget):
             new_display_spec=self.new_display_spec.text(), crop=self.crop.text(), start_app=self.start_app.text(),
             turn_screen_off=self.turn_screen_off.isChecked(), stay_awake=self.stay_awake.isChecked(),
             show_touches=self.show_touches.isChecked(), keyboard_uhid=self.keyboard_uhid.isChecked(),
+            record_timestamp=self.record_timestamp.isChecked(),
         )
 
     def build_args(self) -> list[str]:
@@ -690,23 +736,69 @@ class ScrcpyPage(QWidget):
 
     def reset_defaults(self) -> None:
         defaults = ScrcpyConfig()
+        movies = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.MoviesLocation)
+        self.apply_config(replace(defaults, record_path=str(Path(movies) / defaults.record_path)), "balanced")
+
+    def apply_config(self, config: ScrcpyConfig, profile: str = "custom") -> None:
+        """Load values into the form; values a widget does not offer keep the current choice."""
         self._updating = True
         try:
+            for name in self.SPIN_FIELDS:
+                getattr(self, name).setValue(getattr(config, name))
+            for name in self.CHECK_FIELDS:
+                getattr(self, name).setChecked(getattr(config, name))
             for name in self.COMBO_FIELDS:
                 widget = getattr(self, name)
-                widget.setCurrentIndex(widget.findData(getattr(defaults, name)))
-            for name in self.SPIN_FIELDS:
-                getattr(self, name).setValue(getattr(defaults, name))
-            for name in self.CHECK_FIELDS:
-                getattr(self, name).setChecked(getattr(defaults, name))
-            for name in ("new_display_spec", "crop", "start_app"):
-                getattr(self, name).setText(getattr(defaults, name))
-            movies = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.MoviesLocation)
-            self.record_path.setText(str(Path(movies) / defaults.record_path))
-            self.profile.setCurrentIndex(self.profile.findData("balanced"))
+                index = widget.findData(getattr(config, name))
+                if index >= 0:
+                    widget.setCurrentIndex(index)
+            for name in ("new_display_spec", "crop", "start_app", "record_path"):
+                getattr(self, name).setText(getattr(config, name))
+            index = self.profile.findData(profile)
+            self.profile.setCurrentIndex(index if index >= 0 else self.profile.findData("custom"))
         finally:
             self._updating = False
         self._refresh_config()
+
+    def load_config(self) -> bool:
+        """Restore the last saved launch configuration; a broken file keeps defaults."""
+        if self.config_path is None:
+            return False
+        try:
+            data = json.loads(self.config_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return False
+        except (OSError, ValueError):
+            return False
+        if not isinstance(data, dict):
+            return False
+        profile = data.get("profile")
+        self.apply_config(config_from_dict(data.get("config")), profile if isinstance(profile, str) else "custom")
+        return True
+
+    def _config_snapshot(self) -> dict[str, object]:
+        return {"version": 1, "profile": self.profile.currentData(), "config": config_to_dict(self.current_config())}
+
+    def save_config(self) -> bool:
+        self._save_timer.stop()
+        if self.config_path is None:
+            return False
+        snapshot = self._config_snapshot()
+        if snapshot == self._saved_config:
+            return True
+        temporary = self.config_path.with_name(self.config_path.name + ".tmp")
+        try:
+            self.config_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(temporary, self.config_path)
+        except OSError:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            return False
+        self._saved_config = snapshot
+        return True
 
     def _profile_changed(self) -> None:
         if self._updating:
@@ -751,6 +843,9 @@ class ScrcpyPage(QWidget):
 
     def _refresh_config(self) -> None:
         config = self.current_config()
+        if (not self._loading and not self._updating and self.config_path is not None
+                and self._config_snapshot() != self._saved_config):
+            self._save_timer.start()
         self.audio_settings.setEnabled(config.audio_enabled)
         self.record_settings.setEnabled(config.record_enabled)
         self.control_settings.setEnabled(not config.record_only)
@@ -848,6 +943,8 @@ class ScrcpyPage(QWidget):
             return None
         config = self.current_config()
         serial = self._serial
+        if config.record_enabled and config.record_timestamp and config.record_path.strip():
+            config = replace(config, record_path=timestamped_recording_path(config.record_path, serial, self.now()))
         try:
             args = build_scrcpy_args(serial, config)
             if config.record_enabled:
