@@ -9,12 +9,10 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSplitter, QTableWidget,
     QTableWidgetItem, QTabWidget, QTextEdit, QVBoxLayout, QWidget)
 
-from android_apks import PackageController
-from android_backend import TaskRunner
-from android_users import AndroidUserController
-import ui_kit
-
-
+from sysdroid.core.apks import PackageController
+from sysdroid.core.backend import TaskRunner
+from sysdroid.core.users import AndroidUserController
+from sysdroid.ui import kit as ui_kit
 class NumericItem(QTableWidgetItem):
     def __lt__(self, other):
         left, right = self.data(Qt.ItemDataRole.UserRole), other.data(Qt.ItemDataRole.UserRole)

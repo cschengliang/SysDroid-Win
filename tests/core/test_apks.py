@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QObject, Signal
 
-from android_backend import Task
-from android_apks import PackageController, parse_package_dump, parse_package_list, parse_package_paths
+from sysdroid.core.backend import Task
+from sysdroid.core.apks import PackageController, parse_package_dump, parse_package_list, parse_package_paths
 
 
 class Runner(QObject):
@@ -216,8 +216,8 @@ def test_export_switch_retains_partial_without_attaching_old_result(ready, tmp_p
 
 def test_page_confirmation_context_switch_never_submits_export(qapp, monkeypatch, tmp_path):
     from PySide6.QtWidgets import QFileDialog, QMessageBox
-    from android_users import AndroidUserController
-    from apk_page import ApkPage
+    from sysdroid.core.users import AndroidUserController
+    from sysdroid.ui.pages.apk_page import ApkPage
 
     runner = Runner()
     users = AndroidUserController(runner)
@@ -247,8 +247,8 @@ def test_page_confirmation_context_switch_never_submits_export(qapp, monkeypatch
 
 def test_page_version_sorting_and_filter_keep_selected_package(qapp):
     from PySide6.QtCore import Qt
-    from android_users import AndroidUserController
-    from apk_page import ApkPage
+    from sysdroid.core.users import AndroidUserController
+    from sysdroid.ui.pages.apk_page import ApkPage
 
     runner = Runner()
     users = AndroidUserController(runner)
@@ -276,8 +276,8 @@ def test_page_version_sorting_and_filter_keep_selected_package(qapp):
 
 @pytest.mark.parametrize('hide_during_refresh', [False, True])
 def test_refresh_updates_discovered_users_and_selected_users_packages(qapp, hide_during_refresh):
-    from android_users import AndroidUserController
-    from apk_page import ApkPage
+    from sysdroid.core.users import AndroidUserController
+    from sysdroid.ui.pages.apk_page import ApkPage
 
     runner = Runner()
     users = AndroidUserController(runner)
@@ -306,8 +306,8 @@ def test_refresh_updates_discovered_users_and_selected_users_packages(qapp, hide
 
 
 def test_refresh_recovers_after_failed_user_discovery(qapp):
-    from android_users import AndroidUserController
-    from apk_page import ApkPage
+    from sysdroid.core.users import AndroidUserController
+    from sysdroid.ui.pages.apk_page import ApkPage
 
     runner = Runner()
     users = AndroidUserController(runner)

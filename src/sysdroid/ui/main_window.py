@@ -1,12 +1,7 @@
 from __future__ import annotations
 
-import sys
 from datetime import datetime
-from pathlib import Path
 from typing import Callable
-
-# Embedded Python does not add the script directory to sys.path.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence
@@ -14,23 +9,22 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QBoxLayout, QButtonGroup, QCheckBox, QComboBox, QFrame, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
     QMenu, QMenuBar, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
-    QSizePolicy, QSplitter, QStackedWidget, QStatusBar, QStyleFactory,
+    QSizePolicy, QSplitter, QStackedWidget, QStatusBar,
     QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
 )
 
-import theme
-import ui_kit
-from app_info import APP_NAME, APP_TITLE, APP_VERSION
-from android_backend import DATA_DIR, STATUS_LABELS, Device, Task, TaskRunner, parse_devices
-from command_library import CommandLibraryPage
-from prop_page import PropPage
-from scrcpy_page import ScrcpyPage
-from task_panel import TaskPanel
-from runtime_paths import configure_runtime
-from android_users import AndroidUserController
-from settings_page import SettingsPage
-from apk_page import ApkPage
-from process_page import ProcessPage
+from sysdroid.app_info import APP_NAME, APP_TITLE, APP_VERSION
+from sysdroid.core.backend import DATA_DIR, STATUS_LABELS, Device, Task, TaskRunner, parse_devices
+from sysdroid.core.users import AndroidUserController
+from sysdroid.ui import kit as ui_kit
+from sysdroid.ui import theme
+from sysdroid.ui.pages.apk_page import ApkPage
+from sysdroid.ui.pages.command_page import CommandLibraryPage
+from sysdroid.ui.pages.process_page import ProcessPage
+from sysdroid.ui.pages.prop_page import PropPage
+from sysdroid.ui.pages.scrcpy_page import ScrcpyPage
+from sysdroid.ui.pages.settings_page import SettingsPage
+from sysdroid.ui.task_panel import TaskPanel
 
 
 DOCK_LOG, DOCK_TASKS = 0, 1
@@ -920,25 +914,3 @@ class AndroidToolboxWindow(QMainWindow):
             page.set_active(False)
         self._save_workspace()
         event.accept()
-
-
-
-def main() -> int:
-    app = QApplication(sys.argv)
-    if "windows11" in QStyleFactory.keys():
-        app.setStyle("windows11")
-    app.setApplicationName(APP_NAME)
-    app.setOrganizationName(APP_NAME)
-    app.setFont(theme.app_font())
-    runtime_error = ""
-    try:
-        configure_runtime()
-    except ValueError as exc:
-        runtime_error = str(exc)
-    window = AndroidToolboxWindow(runtime_error)
-    window.show()
-    return app.exec()
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

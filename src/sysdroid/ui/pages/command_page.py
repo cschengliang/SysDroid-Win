@@ -12,14 +12,12 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from android_backend import STATUS_LABELS, TERMINAL_STATUSES, Task, TaskRunner, powershell_command
-from android_commands import (
+from sysdroid.core.backend import STATUS_LABELS, TERMINAL_STATUSES, Task, TaskRunner, powershell_command
+from sysdroid.core.commands import (
     CATEGORIES, EXECUTION_TYPES, Command, CommandStore, PreparedCommand, StorageError,
     is_remote_shell, prepare_command, variable_names,
 )
-import ui_kit
-
-
+from sysdroid.ui import kit as ui_kit
 def command_preview(prepared: PreparedCommand, program: str = "adb") -> str:
     return powershell_command(program, (["-s", prepared.serial] if prepared.serial else []) + list(prepared.args))
 

@@ -11,12 +11,10 @@ from PySide6.QtWidgets import (
     QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from android_backend import TaskRunner
-from android_settings import SettingsController, SettingValue
-from android_users import AndroidUserController
-import ui_kit
-
-
+from sysdroid.core.backend import TaskRunner
+from sysdroid.core.settings import SettingsController, SettingValue
+from sysdroid.core.users import AndroidUserController
+from sysdroid.ui import kit as ui_kit
 def _note(text: str = "") -> QLabel:
     label = QLabel(text)
     label.setWordWrap(True)

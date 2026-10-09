@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from android_backend import TERMINAL_STATUSES, TaskRunner, parse_devices
+from sysdroid.core.backend import TERMINAL_STATUSES, TaskRunner, parse_devices
 
 
 def test_device_parser_preserves_unusable_states_without_daemon_noise():
@@ -31,8 +31,7 @@ def test_finished_task_contains_complete_unicode_streams_and_real_failure(runner
 
 @pytest.mark.parametrize("outcome", ["cancelled", "timed_out"])
 def test_stopping_adb_task_waits_for_result_and_preserves_first_outcome(runner, qtbot, monkeypatch, outcome):
-    import android_backend
-
+    from sysdroid.core import backend as android_backend
     entered = threading.Event()
     release = threading.Event()
 
@@ -116,8 +115,7 @@ def test_clear_history_is_selective_and_keeps_current_tasks(runner):
 
 
 def test_clear_history_preserves_running_adb_and_records_its_completion(runner, qtbot, monkeypatch):
-    import android_backend
-
+    from sysdroid.core import backend as android_backend
     old = runner.start_adb("old adb", ["devices"])
     runner.cancel(old.id)
     entered = threading.Event()
@@ -286,7 +284,7 @@ def test_transient_sampling_preserves_history_and_pin_until_released(runner, qtb
 
 
 def test_active_count_includes_queue_and_cancelled_requests_waiting_for_return(runner, qtbot, monkeypatch):
-    import android_backend
+    from sysdroid.core import backend as android_backend
     entered, release = threading.Event(), threading.Event()
     counts = []
     runner.active_count_changed.connect(counts.append)
@@ -309,7 +307,7 @@ def test_active_count_includes_queue_and_cancelled_requests_waiting_for_return(r
 
 
 def test_buffer_truncation_retains_both_unicode_tails_before_finished(runner, monkeypatch):
-    import android_backend
+    from sysdroid.core import backend as android_backend
     monkeypatch.setattr(android_backend, "OUTPUT_LIMIT", 128)
     task = runner.start_adb("buffered", ["devices"], transient=True)
     finished = []

@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Mapping
 
-from android_backend import DATA_DIR
+from sysdroid.core.backend import DATA_DIR
 
 
 CATEGORIES = ("设备", "Shell", "应用", "系统", "文件")

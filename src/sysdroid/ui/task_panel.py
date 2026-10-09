@@ -6,10 +6,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QLa
                                QHeaderView, QPlainTextEdit, QPushButton, QSplitter, QTabWidget, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
-from android_backend import OUTPUT_LIMIT, STATUS_LABELS, TERMINAL_STATUSES, Task, TaskRunner
-import ui_kit
-
-
+from sysdroid.core.backend import OUTPUT_LIMIT, STATUS_LABELS, TERMINAL_STATUSES, Task, TaskRunner
+from sysdroid.ui import kit as ui_kit
 class TaskPanel(QTabWidget):
     def __init__(self, runner: TaskRunner, parent: QWidget | None = None) -> None:
         super().__init__(parent)

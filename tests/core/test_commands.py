@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from android_commands import (
+from sysdroid.core.commands import (
     EXECUTION_TYPES,
     Command,
     CommandStore,

@@ -29,10 +29,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from android_backend import OUTPUT_LIMIT, TRUNCATED, STATUS_LABELS, TERMINAL_STATUSES, Task, TaskRunner, powershell_command
-import ui_kit
-
-
+from sysdroid.core.backend import OUTPUT_LIMIT, TRUNCATED, STATUS_LABELS, TERMINAL_STATUSES, Task, TaskRunner, powershell_command
+from sysdroid.ui import kit as ui_kit
 @dataclass(frozen=True)
 class ScrcpyConfig:
     max_size: int = 1080

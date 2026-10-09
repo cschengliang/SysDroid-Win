@@ -1,6 +1,6 @@
 import pytest
 
-from scrcpy_page import ScrcpyConfig, build_scrcpy_args, parse_encoder_list, validate_recording_path
+from sysdroid.ui.pages.scrcpy_page import ScrcpyConfig, build_scrcpy_args, parse_encoder_list, validate_recording_path
 
 
 def test_record_only_suppresses_control_and_display_but_preserves_literal_path():

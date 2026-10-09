@@ -25,11 +25,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from android_backend import TaskRunner
-from android_props import PropController
-import ui_kit
-
-
+from sysdroid.core.backend import TaskRunner
+from sysdroid.core.props import PropController
+from sysdroid.ui import kit as ui_kit
 def _note(text: str) -> QLabel:
     label = QLabel(text)
     label.setWordWrap(True)

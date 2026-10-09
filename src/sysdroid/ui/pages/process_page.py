@@ -11,11 +11,9 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from android_backend import OUTPUT_LIMIT, TaskRunner
-from android_processes import ProcessController, ProcessInfo
-import ui_kit
-
-
+from sysdroid.core.backend import OUTPUT_LIMIT, TaskRunner
+from sysdroid.core.processes import ProcessController, ProcessInfo
+from sysdroid.ui import kit as ui_kit
 _ID_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 
 

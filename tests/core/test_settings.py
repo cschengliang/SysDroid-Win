@@ -6,10 +6,10 @@ import pytest
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox
 
-from android_backend import Task
-from android_settings import SettingsController, SettingValue, parse_setting_names
-from android_users import AndroidUserController
-from settings_page import SettingsPage
+from sysdroid.core.backend import Task
+from sysdroid.core.settings import SettingsController, SettingValue, parse_setting_names
+from sysdroid.core.users import AndroidUserController
+from sysdroid.ui.pages.settings_page import SettingsPage
 
 
 class ManualSettingsRunner(QObject):

@@ -1,8 +1,8 @@
 import pytest
 from PySide6.QtCore import QObject, Signal
 
-from android_backend import Task
-from android_users import AndroidUserController, parse_users
+from sysdroid.core.backend import Task
+from sysdroid.core.users import AndroidUserController, parse_users
 
 
 class ManualRunner(QObject):

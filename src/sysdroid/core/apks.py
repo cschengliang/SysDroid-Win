@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Iterator
 
 from PySide6.QtCore import QObject, Signal
-from android_backend import Task, TaskRunner
+from sysdroid.core.backend import Task, TaskRunner
 
 _PACKAGE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
 _DIAGNOSTIC = re.compile(

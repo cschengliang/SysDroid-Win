@@ -5,7 +5,7 @@ import shlex
 
 from PySide6.QtCore import QObject, Signal
 
-from android_backend import Task, TaskRunner
+from sysdroid.core.backend import Task, TaskRunner
 
 
 def parse_users(output: str) -> dict[int, str]:

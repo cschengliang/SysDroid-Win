@@ -3,10 +3,8 @@ from PySide6.QtCore import QSettings
 from PySide6.QtGui import QColor, QGuiApplication, QPalette
 from PySide6.QtWidgets import QApplication, QLabel, QTableWidget
 
-import theme
-import ui_kit
-
-
+from sysdroid.ui import theme
+from sysdroid.ui import kit as ui_kit
 @pytest.fixture
 def clean_theme(qapp):
     yield qapp
@@ -78,9 +76,9 @@ def test_roles_info_notes_and_empty_state_text(qapp):
 
 
 def test_main_window_brand_pages_theme_and_dock(clean_theme, monkeypatch, tmp_path):
-    import android_backend
-    import android_commands
-    import android_toolbox
+    from sysdroid.core import backend as android_backend
+    from sysdroid.core import commands as android_commands
+    from sysdroid.ui import main_window as android_toolbox
     for module in (android_backend, android_commands, android_toolbox):
         monkeypatch.setattr(module, "DATA_DIR", tmp_path)
     # A runtime error keeps the window from starting real ADB processes.

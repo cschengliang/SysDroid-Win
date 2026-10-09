@@ -4,12 +4,12 @@ import shlex
 import pytest
 from PySide6.QtCore import QObject, Qt, Signal
 
-from android_backend import TRUNCATED, Task
-from android_processes import (
+from sysdroid.core.backend import TRUNCATED, Task
+from sysdroid.core.processes import (
     ProcessController, aggregate_cpu_percent, apply_cpu_delta, parse_activity_record,
     parse_meminfo, parse_process_details, parse_process_sample, parse_process_stat,
 )
-from process_page import ProcessPage
+from sysdroid.ui.pages.process_page import ProcessPage
 
 
 NONCE = "fixture42"

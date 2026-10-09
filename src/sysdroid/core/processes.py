@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from android_backend import OUTPUT_LIMIT, TRUNCATED, Task, TaskRunner
+from sysdroid.core.backend import OUTPUT_LIMIT, TRUNCATED, Task, TaskRunner
 
 
 @dataclass(frozen=True)

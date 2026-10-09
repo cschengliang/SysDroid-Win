@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from runtime_paths import adb_executable, configure_runtime
+from sysdroid.runtime_paths import adb_executable, configure_runtime
 
 
 def test_conflicting_or_missing_overrides_never_fall_back(monkeypatch, tmp_path):
@@ -22,7 +22,7 @@ def test_conflicting_or_missing_overrides_never_fall_back(monkeypatch, tmp_path)
 
 
 def test_default_ignores_path_and_explicit_choice_configures_both(monkeypatch, tmp_path):
-    import runtime_paths
+    from sysdroid import runtime_paths
     adb = tmp_path / "tool" / "scrcpy-win64-v5.0" / "adb.exe"
     adb.parent.mkdir(parents=True)
     adb.touch()
@@ -36,3 +36,4 @@ def test_default_ignores_path_and_explicit_choice_configures_both(monkeypatch, t
     adb.unlink()
     with pytest.raises(ValueError):
         adb_executable()
+

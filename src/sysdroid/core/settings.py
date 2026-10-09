@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 from PySide6.QtCore import QObject, Signal
 
-from android_backend import OUTPUT_LIMIT, TRUNCATED, Task, TaskRunner
+from sysdroid.core.backend import OUTPUT_LIMIT, TRUNCATED, Task, TaskRunner
 
 
 _NAMESPACES = frozenset({"system", "secure", "global"})

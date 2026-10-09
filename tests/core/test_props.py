@@ -3,8 +3,8 @@ import shlex
 import pytest
 from PySide6.QtCore import QObject, Signal
 
-from android_backend import Task
-from android_props import PropController, parse_getprop
+from sysdroid.core.backend import Task
+from sysdroid.core.props import PropController, parse_getprop
 
 
 BASE_PROPERTIES = {"debug.pygui.existing": "before", "debug.pygui.empty": ""}
@@ -387,7 +387,7 @@ def test_device_context_does_not_query_until_requested(prop_runner):
 
 
 def test_page_lazily_loads_context_and_keeps_hidden_write_readback(prop_runner):
-    from prop_page import PropPage
+    from sysdroid.ui.pages.prop_page import PropPage
 
     page = PropPage(prop_runner)
     page.set_device("device-a")
@@ -424,7 +424,7 @@ def test_page_lazily_loads_context_and_keeps_hidden_write_readback(prop_runner):
 
 
 def test_filter_and_refresh_preserve_selected_proposal(prop_runner):
-    from prop_page import PropPage
+    from sysdroid.ui.pages.prop_page import PropPage
 
     page = PropPage(prop_runner)
     page.set_device("device-a")
@@ -447,7 +447,7 @@ def test_filter_and_refresh_preserve_selected_proposal(prop_runner):
 @pytest.mark.parametrize("field", ["name", "proposal"])
 def test_confirmation_rejects_editor_change_even_when_restored(prop_runner, monkeypatch, field):
     from PySide6.QtWidgets import QMessageBox
-    from prop_page import PropPage
+    from sysdroid.ui.pages.prop_page import PropPage
 
     page = PropPage(prop_runner)
     page.set_device("device-a")

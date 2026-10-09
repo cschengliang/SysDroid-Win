@@ -17,7 +17,7 @@ from pathlib import Path
 import adbutils
 from adbutils import AdbTimeout
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
-from runtime_paths import adb_executable, application_dir
+from sysdroid.runtime_paths import adb_executable, application_dir
 
 DATA_DIR = Path(os.environ.get("ANDROID_TOOLBOX_DATA_DIR") or
                 str(Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "AndroidToolbox"))

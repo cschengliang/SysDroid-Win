@@ -5,7 +5,7 @@ import shlex
 
 from PySide6.QtCore import QObject, Signal
 
-from android_backend import Task, TaskRunner
+from sysdroid.core.backend import Task, TaskRunner
 
 
 _GETPROP_RECORD = re.compile(r"^\[([^\n]*?)\]: \[", re.MULTILINE)
