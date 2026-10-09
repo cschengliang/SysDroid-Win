@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from android_backend import TaskRunner
 from android_settings import SettingsController, SettingValue
 from android_users import AndroidUserController
+import ui_kit
 
 
 def _note(text: str = "") -> QLabel:
@@ -80,9 +81,7 @@ class SettingsPage(QWidget):
         self._controller_changed()
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(7)
+        layout = ui_kit.page_layout(QVBoxLayout(self))
         device_row = QHBoxLayout()
         device_row.addWidget(QLabel("当前设备"))
         self.device_input = QLineEdit()
@@ -116,15 +115,17 @@ class SettingsPage(QWidget):
         self.refresh_button.clicked.connect(self._refresh)
         context_row.addWidget(self.refresh_button)
         layout.addLayout(context_row)
-        self.scope_label = _note()
+        self.scope_label = ui_kit.set_role(_note(), "hint")
         layout.addWidget(self.scope_label)
         self.status_label = _note()
         self.status_label.setObjectName("settingsStatus")
+        ui_kit.set_role(self.status_label, "hint")
         layout.addWidget(self.status_label)
         self.error_label = _note()
         self.error_label.setObjectName("settingsError")
-        self.error_label.setStyleSheet("color: #b42318;")
+        ui_kit.set_role(self.error_label, "error")
         self.error_scroll = QScrollArea()
+        ui_kit.set_role(self.error_scroll, "banner")
         self.error_scroll.setWidgetResizable(True)
         self.error_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self.error_scroll.setMinimumHeight(50)

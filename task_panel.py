@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QLa
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
 from android_backend import OUTPUT_LIMIT, STATUS_LABELS, TERMINAL_STATUSES, Task, TaskRunner
+import ui_kit
 
 
 class TaskPanel(QTabWidget):
@@ -25,9 +26,9 @@ class TaskPanel(QTabWidget):
         self._elapsed_timer.timeout.connect(self._update_elapsed)
         self.setObjectName("taskPanel")
         tasks_page = QWidget()
-        tasks_layout = QVBoxLayout(tasks_page)
+        tasks_layout = ui_kit.page_layout(QVBoxLayout(tasks_page), 8, 6)
         toolbar = QHBoxLayout()
-        self.summary = QLabel("暂无活动任务")
+        self.summary = ui_kit.set_role(QLabel("暂无活动任务"), "hint")
         toolbar.addWidget(self.summary, 1)
         self.view_button = QPushButton("查看所选输出")
         self.view_button.clicked.connect(lambda: self.show_task(self.selected_id))
@@ -56,7 +57,7 @@ class TaskPanel(QTabWidget):
         tasks_layout.addWidget(self.table)
         self.addTab(tasks_page, "活动任务")
         output_page = QWidget()
-        output_layout = QVBoxLayout(output_page)
+        output_layout = ui_kit.page_layout(QVBoxLayout(output_page), 8, 6)
         output_toolbar = QHBoxLayout()
         self.info = QLabel("选择任务或历史记录查看输出")
         self.info.setWordWrap(True)

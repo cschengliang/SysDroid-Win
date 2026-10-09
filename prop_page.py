@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from android_backend import TaskRunner
 from android_props import PropController
+import ui_kit
 
 
 def _note(text: str) -> QLabel:
@@ -83,8 +84,7 @@ class PropPage(QWidget):
         self._controller_changed()
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout = ui_kit.page_layout(QVBoxLayout(self))
         device_row = QHBoxLayout()
         device_row.addWidget(QLabel("当前设备"))
         self.device_input = QLineEdit()
@@ -105,11 +105,13 @@ class PropPage(QWidget):
 
         self.status_label = _note("")
         self.status_label.setObjectName("propStatus")
+        ui_kit.set_role(self.status_label, "hint")
         layout.addWidget(self.status_label)
         self.error_label = _note("")
         self.error_label.setObjectName("propError")
-        self.error_label.setStyleSheet("color: #b42318;")
+        ui_kit.set_role(self.error_label, "error")
         self.error_scroll = QScrollArea()
+        ui_kit.set_role(self.error_scroll, "banner")
         self.error_scroll.setWidgetResizable(True)
         self.error_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self.error_scroll.setMinimumHeight(50)
@@ -196,7 +198,7 @@ class PropPage(QWidget):
         editor_layout.addWidget(self.editor_device_label)
         self.editor_error_label = _note("")
         self.editor_error_label.setObjectName("propEditorError")
-        self.editor_error_label.setStyleSheet("color: #b42318;")
+        ui_kit.set_role(self.editor_error_label, "error")
         editor_layout.addWidget(self.editor_error_label)
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)

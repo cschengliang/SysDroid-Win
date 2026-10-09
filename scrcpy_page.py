@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from android_backend import OUTPUT_LIMIT, TRUNCATED, STATUS_LABELS, TERMINAL_STATUSES, Task, TaskRunner, powershell_command
+import ui_kit
 
 
 @dataclass(frozen=True)
@@ -249,7 +250,7 @@ class ScrcpyPage(QWidget):
         return body
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = ui_kit.page_layout(QVBoxLayout(self))
         toolbar = QHBoxLayout()
         toolbar.addWidget(QLabel("当前设备"))
         self.current_device = QLineEdit()
@@ -270,9 +271,10 @@ class ScrcpyPage(QWidget):
             toolbar.addWidget(button)
         layout.addLayout(toolbar)
         self.error_label = self._note("")
-        self.error_label.setStyleSheet("color: #b42318;")
+        ui_kit.set_role(self.error_label, "error")
         self.error_label.hide()
         self.error_scroll = QScrollArea()
+        ui_kit.set_role(self.error_scroll, "banner")
         self.error_scroll.setWidgetResizable(True)
         self.error_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self.error_scroll.setMinimumHeight(50)
