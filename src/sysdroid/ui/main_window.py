@@ -7,7 +7,7 @@ from typing import Callable
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QBoxLayout, QButtonGroup, QCheckBox, QComboBox, QFrame, QGroupBox,
+    QAbstractItemView, QApplication, QBoxLayout, QButtonGroup, QCheckBox, QComboBox, QFrame, QGridLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
     QMenu, QMenuBar, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
     QSizePolicy, QSplitter, QStackedWidget, QStatusBar,
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from sysdroid.app_info import APP_NAME, APP_TITLE, APP_VERSION
 from sysdroid.core.backend import DATA_DIR, STATUS_LABELS, Device, Task, TaskRunner, parse_devices, significant_stderr
+from sysdroid.core.device_info import STATUS_SCRIPT, parse_device_status
 from sysdroid.core.devices import DeviceTracker
 from sysdroid.core.users import AndroidUserController
 from sysdroid.ui import kit as ui_kit
@@ -426,6 +427,23 @@ class AndroidToolboxWindow(QMainWindow):
         info.addWidget(self.device_details)
         self.android_version = QLabel("Android：未检测")
         info.addWidget(self.android_version)
+        facts = QGridLayout()
+        facts.setHorizontalSpacing(18)
+        facts.setVerticalSpacing(2)
+        self.device_facts: dict[str, QLabel] = {}
+        for index, (key, title) in enumerate((("battery", "电量"), ("resolution", "分辨率"), ("abi", "ABI"),
+                                              ("selinux", "SELinux"), ("ip", "IP"), ("fingerprint", "指纹"))):
+            label = ui_kit.set_role(QLabel(f"{title}：—"), "hint")
+            label.setObjectName(f"deviceFact_{key}")
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            label.setProperty("factTitle", title)
+            self.device_facts[key] = label
+            if key == "fingerprint":
+                label.setWordWrap(True)
+                facts.addWidget(label, 2, 0, 1, 3)
+            else:
+                facts.addWidget(label, index // 3, index % 3)
+        info.addLayout(facts)
         pills = QHBoxLayout()
         pills.setSpacing(6)
         self.privilege_labels = {}
@@ -705,6 +723,7 @@ class AndroidToolboxWindow(QMainWindow):
             self.android_version.setText("Android：未检测")
             for name in self.privilege_labels:
                 self._set_pill(name, f"{name}：未检测", "off")
+            self._set_facts({})
             self.remount_button.setEnabled(False)
             if self._device_serial:
                 self._write_log(f"[INFO] 当前设备：{self._device_serial} · {STATE_LABELS.get(state, state)}")
@@ -858,8 +877,7 @@ class AndroidToolboxWindow(QMainWindow):
     def _query_status(self, auto: bool = False) -> None:
         if not self._require_device(quiet=bool(auto)):
             return
-        script = "id -u; getprop ro.debuggable; getprop ro.build.version.release; cat /proc/mounts"
-        task = self._run_adb("检测设备特权状态", ["shell", script], self._device_serial,
+        task = self._run_adb("检测设备特权状态", ["shell", STATUS_SCRIPT], self._device_serial,
                              callback=self._status_received, transient=bool(auto))
         self._status_task_id = task.id
         self.android_version.setText("Android：正在检测…")
@@ -868,6 +886,7 @@ class AndroidToolboxWindow(QMainWindow):
         self.android_version.setText("Android：状态检测失败 · 点击「获取状态」重试")
         for name in self.privilege_labels:
             self._set_pill(name, f"{name}：检测失败", "warn")
+        self._set_facts({})
         self.remount_button.setEnabled(False)
         self._write_log(f"[WARN] 设备状态检测失败：{reason}")
 
@@ -879,19 +898,28 @@ class AndroidToolboxWindow(QMainWindow):
             detail = (significant_stderr(task.stderr) or task.stdout).strip()[-300:]
             self._status_failed(f"{STATUS_LABELS.get(task.status, task.status)}" + (f" · {detail}" if detail else ""))
             return
-        lines = task.stdout.splitlines()
-        if len(lines) < 3:
-            self._status_failed("输出不完整，请查看任务输出")
+        try:
+            status = parse_device_status(task.stdout)
+        except ValueError as exc:
+            self._status_failed(str(exc))
             return
-        root = lines[0].strip() == "0"
+        root = status.root
         self._set_pill("Root", "Root：" + ("是" if root else "否"), "ok" if root else "off")
-        debuggable = lines[1].strip()
-        self._set_pill("Debuggable", "Debuggable：" + debuggable, "ok" if debuggable == "1" else "off")
-        writable = any(len(parts := line.split()) >= 4 and parts[1] in {"/", "/system", "/vendor"}
-                       and "rw" in parts[3].split(",") for line in lines[3:])
+        self._set_pill("Debuggable", "Debuggable：" + status.debuggable, "ok" if status.debuggable == "1" else "off")
+        writable = status.system_writable
         self._set_pill("Remount", "Remount：" + ("系统分区可写" if writable else "未见可写系统分区"), "ok" if writable else "off")
         self.remount_button.setEnabled(root)
-        self.android_version.setText("Android：" + lines[2].strip())
+        self.android_version.setText("Android：" + status.release)
+        self._set_facts({"battery": status.battery, "resolution": status.resolution, "abi": status.abi,
+                         "selinux": status.selinux, "ip": status.ip, "fingerprint": status.fingerprint},
+                        {"abi": status.abilist})
+
+    def _set_facts(self, values: dict[str, str], tooltips: dict[str, str] | None = None) -> None:
+        for key, label in self.device_facts.items():
+            value = values.get(key, "")
+            label.setText(f"{label.property('factTitle')}：{value or '—'}")
+            tip = (tooltips or {}).get(key, "")
+            label.setToolTip(f"全部 ABI：{tip}" if key == "abi" and tip else (value if key == "fingerprint" else ""))
 
     def _set_pill(self, name: str, text: str, state: str) -> None:
         label = self.privilege_labels[name]

@@ -191,3 +191,45 @@ def test_shortcuts_dispatch_to_current_page_and_focused_task_panel(window, qtbot
     assert window.page_shortcut("search") and calls[-1] == "task search"
     shortcuts = {action.shortcut().toString() for action in window.actions()}
     assert {"F5", "Ctrl+F", "Ctrl+K"} <= shortcuts
+
+
+FULL_STATUS = """0
+1
+14
+@@abi
+arm64-v8a
+arm64-v8a,armeabi-v7a,armeabi
+@@selinux
+Enforcing
+@@fingerprint
+google/oriole/oriole:14/AP2A.240805.005/12025142:user/release-keys
+@@size
+Physical size: 1080x2400
+Override size: 720x1600
+@@battery
+  USB powered: true
+  status: 2
+  level: 85
+  temperature: 312
+@@ip
+30: wlan0    inet 192.168.1.23/24 brd 192.168.1.255 scope global wlan0
+@@mounts
+/dev/block/dm-1 /vendor ext4 rw,seclabel 0 0
+"""
+
+
+def test_status_card_shows_batched_device_facts(window, qtbot):
+    answer_devices(window, qtbot, ("a", "device"))
+    qtbot.waitUntil(lambda: bool(status_queries(window)), timeout=2000)
+    query = status_queries(window)[-1]
+    assert query.args[0] == "shell" and "@@battery" in query.args[1]
+    finish(window, query, FULL_STATUS)
+    facts = {key: label.text() for key, label in window.device_facts.items()}
+    assert facts["battery"].startswith("电量：85%") and facts["abi"] == "ABI：arm64-v8a"
+    assert facts["selinux"] == "SELinux：Enforcing" and facts["ip"] == "IP：192.168.1.23（wlan0）"
+    assert facts["resolution"] == "分辨率：720x1600（物理 1080x2400）"
+    assert window.device_facts["abi"].toolTip() == "全部 ABI：arm64-v8a,armeabi-v7a,armeabi"
+    assert window.privilege_labels["Remount"].text() == "Remount：系统分区可写"
+    window._refresh_devices()
+    answer_devices(window, qtbot)
+    assert window.device_facts["battery"].text() == "电量：—"
