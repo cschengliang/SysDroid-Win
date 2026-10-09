@@ -1,0 +1,169 @@
+# 构建 Windows x64 便携版：手动触发只产出 Artifact；推送 v* 标签时额外发布 Release。
+name: Build portable
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PY_VERSION: 3.14.8
+  PY_DIR: lib\python-3.14.8-embed-amd64
+  PY_SHA256: a93abe456ab01bd96d7a085b3cdb6566b3063f4241360d114142fbdb07f0a310
+  # Must match TOOLS in portable_assets.py
+  SCRCPY_NAME: scrcpy-win64-v5.0
+  SCRCPY_URL: https://github.com/Genymobile/scrcpy/releases/download/v5.0/scrcpy-win64-v5.0.zip
+  SCRCPY_SHA256: 44c10d9e82f20ea67227d14d37bf9fbe3603117c5736df3f514544a02ba20a73
+  TERMINAL_NAME: terminal-1.25.2733.0
+  TERMINAL_URL: https://github.com/microsoft/terminal/releases/download/v1.25.2733.0/Microsoft.WindowsTerminal_1.25.2733.0_x64.zip
+  TERMINAL_SHA256: bf3ef2012f6c44d8340a4c58125acc9498d19b580f9890dc043cdf831852e796
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # Download/pip caches live outside the repo so the build never sees them
+      - name: Resolve cache paths
+        run: |
+          "DL=$HOME\sysdroid-downloads" >> $env:GITHUB_ENV
+          "PIP_CACHE_DIR=$HOME\sysdroid-pip-cache" >> $env:GITHUB_ENV
+
+      - name: Cache downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\sysdroid-downloads
+            ~\sysdroid-pip-cache
+          key: dl-py${{ env.PY_VERSION }}-${{ env.SCRCPY_NAME }}-${{ env.TERMINAL_NAME }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            dl-py${{ env.PY_VERSION }}-${{ env.SCRCPY_NAME }}-${{ env.TERMINAL_NAME }}-
+
+      # Download once (or reuse cache) and always verify SHA-256
+      - name: Download and verify archives
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dl = $env:DL
+          New-Item -ItemType Directory -Force $dl | Out-Null
+          $items = @(
+            @{ Url = "https://www.python.org/ftp/python/$env:PY_VERSION/python-$env:PY_VERSION-embed-amd64.zip"; Sha = $env:PY_SHA256 },
+            @{ Url = $env:SCRCPY_URL; Sha = $env:SCRCPY_SHA256 },
+            @{ Url = $env:TERMINAL_URL; Sha = $env:TERMINAL_SHA256 }
+          )
+          foreach ($i in $items) {
+            $file = Join-Path $dl (Split-Path $i.Url -Leaf)
+            if (-not (Test-Path $file) -or (Get-FileHash $file -Algorithm SHA256).Hash -ne $i.Sha) {
+              Write-Host "Downloading $($i.Url)"
+              Invoke-WebRequest $i.Url -OutFile $file
+            }
+            $actual = (Get-FileHash $file -Algorithm SHA256).Hash
+            if ($actual -ne $i.Sha) {
+              Remove-Item $file -Force
+              throw "SHA-256 mismatch for $($i.Url): expected $($i.Sha), got $actual"
+            }
+            Write-Host "OK $file"
+          }
+          # get-pip.py is not pinned; refresh it every run
+          Invoke-WebRequest https://bootstrap.pypa.io/get-pip.py -OutFile (Join-Path $dl 'get-pip.py')
+
+      # Same layout as DEPENDENCIES.md; no pip.ini, so pip uses default PyPI
+      - name: Set up embedded Python
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Expand-Archive "$env:DL\python-$env:PY_VERSION-embed-amd64.zip" -DestinationPath $env:PY_DIR -Force
+          $pth = @('python314.zip', '.', 'Lib\site-packages', '', '# Uncomment to run site.main() automatically', 'import site')
+          Set-Content "$env:PY_DIR\python314._pth" $pth -Encoding ascii
+          New-Item -ItemType Directory -Force "$env:PY_DIR\Lib\site-packages" | Out-Null
+          & "$env:PY_DIR\python.exe" "$env:DL\get-pip.py" --no-warn-script-location
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "$env:PY_DIR\python.exe" -m pip install --no-warn-script-location -r requirements.txt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "$env:PY_DIR\python.exe" --version
+          & "$env:PY_DIR\python.exe" -m pip list
+
+      # Archives have a top-level folder, so extract straight into tool\
+      - name: Place tools
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force tool | Out-Null
+          Expand-Archive "$env:DL\$env:SCRCPY_NAME.zip" -DestinationPath tool -Force
+          Expand-Archive "$env:DL\Microsoft.WindowsTerminal_1.25.2733.0_x64.zip" -DestinationPath tool -Force
+          foreach ($exe in "tool\$env:SCRCPY_NAME\scrcpy.exe", "tool\$env:SCRCPY_NAME\adb.exe", "tool\$env:TERMINAL_NAME\WindowsTerminal.exe") {
+            if (-not (Test-Path $exe)) { throw "Missing $exe after extraction" }
+          }
+
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          & "$env:PY_DIR\python.exe" -s -m pytest tests -q
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      # The build script itself re-downloads/verifies tools and license sources.
+      # NETRC lets requests authenticate to api.github.com only (avoids the 60/h anonymous limit).
+      - name: Build portable package
+        run: |
+          $netrc = Join-Path $env:RUNNER_TEMP 'netrc'
+          "machine api.github.com login x-access-token password $env:GH_TOKEN" | Set-Content $netrc -Encoding ascii
+          $env:NETRC = $netrc
+          try {
+            & "$env:PY_DIR\python.exe" -s build_android_toolbox.py
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          } finally {
+            Remove-Item $netrc -Force -ErrorAction SilentlyContinue
+          }
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Tag name for tag builds, otherwise short commit SHA
+      - name: Name release files
+        id: pkg
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ver = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { $env:GITHUB_SHA.Substring(0, 7) }
+          New-Item -ItemType Directory -Force out | Out-Null
+          $zip = "AndroidToolbox-win-x64-$ver.zip"
+          Copy-Item dist\AndroidToolbox-win-x64.zip "out\$zip"
+          Copy-Item dist\AndroidToolbox-win-x64.files.sha256 "out\AndroidToolbox-win-x64-$ver.files.sha256"
+          $hash = (Get-FileHash "out\$zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zip" | Set-Content "out\$zip.sha256" -Encoding ascii
+          "version=$ver" >> $env:GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AndroidToolbox-win-x64-${{ steps.pkg.outputs.version }}
+          path: out/*
+          if-no-files-found: error
+
+      # On failure, keep the build stage (logs, failure.json) for diagnosis
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ github.run_id }}
+          path: |
+            build/android-toolbox/**/*.json
+            build/android-toolbox/**/*.log
+          if-no-files-found: ignore
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true
