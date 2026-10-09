@@ -11,15 +11,15 @@
 | `lib/python-3.14.8-embed-amd64/` | Windows 嵌入式 Python 及其 `Lib/site-packages`（PySide6、adbutils 等） | 体积达数百 MB，可由官方 zip + pip 重建 |
 | `tool/scrcpy-win64-v5.0/` | Scrcpy 5.0（包含程序使用的 `adb.exe`） | 官方二进制发布包，固定版本和 SHA-256 |
 | `tool/terminal-1.25.2733.0/` | 便携版 Windows Terminal | 同上 |
-| `build/`、`dist/` | 构建中间文件和发行产物 | 由 `build_android_toolbox.py` 生成 |
+| `build/`、`dist/` | 构建中间文件和发行产物 | 由 `scripts/build_android_toolbox.py` 生成 |
 
 ## 2. 版本要求
 
 | 组件 | 版本 | 依据 |
 | --- | --- | --- |
-| CPython（嵌入版，x64） | **3.14.8**（必须完全一致） | `build_android_toolbox.py` 中的 `EXPECTED_PYTHON = (3, 14, 8)`、`start_android_toolbox.bat` |
-| Scrcpy | **5.0**（win64） | `portable_assets.py`、`runtime_paths.py` |
-| Windows Terminal | **1.25.2733.0**（x64 zip） | `portable_assets.py`、`android_backend.py` |
+| CPython（嵌入版，x64） | **3.14.8**（必须完全一致） | `scripts/build_android_toolbox.py` 中的 `EXPECTED_PYTHON = (3, 14, 8)`、`start_android_toolbox.bat` |
+| Scrcpy | **5.0**（win64） | `scripts/portable_assets.py`、`src/sysdroid/runtime_paths.py` |
+| Windows Terminal | **1.25.2733.0**（x64 zip） | `scripts/portable_assets.py`、`src/sysdroid/core/backend.py` |
 | PySide6 | 6.11.2 | 当前开发环境实际安装的版本；只用到 QtCore / QtGui / QtWidgets |
 | adbutils | 2.12.0 | 当前开发环境实际安装的版本 |
 
@@ -40,13 +40,15 @@ Python 第三方包见 [`requirements.txt`](requirements.txt)，版本已按当�
 | Windows Terminal 1.25.2733.0 | https://github.com/microsoft/terminal/releases/download/v1.25.2733.0/Microsoft.WindowsTerminal_1.25.2733.0_x64.zip | `bf3ef2012f6c44d8340a4c58125acc9498d19b580f9890dc043cdf831852e796` |
 | get-pip.py | https://bootstrap.pypa.io/get-pip.py | — |
 
-上表两个 SHA-256 与 `portable_assets.py` 中固定的值一致，构建时会再次校验。PowerShell 可以这样核对：`Get-FileHash <文件> -Algorithm SHA256`。
+上表两个 SHA-256 与 `scripts/portable_assets.py` 中固定的值一致，构建时会再次校验。PowerShell 可以这样核对：`Get-FileHash <文件> -Algorithm SHA256`。
 
 ## 4. 搭建后的目录结构
 
 ```text
 SysDroid-Win/
-├─ android_toolbox.py …            # 源码（git）
+├─ android_toolbox.py              # 源码启动器（git）
+├─ src/sysdroid/                   # 应用代码（git）
+├─ scripts/  tests/  docs/         # 构建脚本、测试、设计文档（git）
 ├─ requirements.txt
 ├─ lib/
 │  └─ python-3.14.8-embed-amd64/
@@ -105,7 +107,7 @@ lib\python-3.14.8-embed-amd64\python.exe -s -m pytest tests -q
 ## 7. 构建与发布
 
 ```bat
-lib\python-3.14.8-embed-amd64\python.exe -s build_android_toolbox.py
+lib\python-3.14.8-embed-amd64\python.exe -s scripts\build_android_toolbox.py
 ```
 
 构建只能在 Windows x64 上，使用上面这个嵌入式解释器（3.14.8，带 `-s`）运行。生成的 `dist\AndroidToolbox-win-x64.zip` 上传到 GitHub Releases 供最终用户下载。
@@ -124,7 +126,7 @@ lib\python-3.14.8-embed-amd64\python.exe -s build_android_toolbox.py
   git push origin v0.1.0
   ```
 
-**流程**：从官方地址下载 Python 3.14.8 嵌入版、Scrcpy 5.0 和 Windows Terminal 1.25.2733.0，并逐个校验 SHA-256（不一致会直接失败），再执行 `pip install -r requirements.txt`（CI 不使用镜像）、`pytest`，最后运行 `build_android_toolbox.py`。下载内容会缓存，下次构建更快。
+**流程**：从官方地址下载 Python 3.14.8 嵌入版、Scrcpy 5.0 和 Windows Terminal 1.25.2733.0，并逐个校验 SHA-256（不一致会直接失败），再执行 `pip install -r requirements.txt`（CI 不使用镜像）、`pytest`，最后运行 `scripts\build_android_toolbox.py`。下载内容会缓存，下次构建更快。
 
 **产物在哪里**
 
