@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
   push:
     tags: ['v*']
+    branches: ['ci/**']   # CI experiments: build only, no release
 
 permissions:
   contents: write
@@ -115,6 +116,24 @@ jobs:
 
       # The build script itself re-downloads/verifies tools and license sources.
       # NETRC lets requests authenticate to api.github.com only (avoids the 60/h anonymous limit).
+      # Diagnostics for Windows-system DLL resolution on the runner
+      - name: Diagnose system DLLs
+        continue-on-error: true
+        run: |
+          $sys = $env:SystemRoot
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber | Format-List
+          foreach ($n in 'icu.dll','icuuc.dll','propsys.dll') {
+            $f = Join-Path "$sys\System32" $n
+            "== $n exists=$(Test-Path $f)"
+            if (Test-Path $f) {
+              (Get-Item $f).VersionInfo | Select-Object ProductName, FileVersion | Format-List
+              $sig = Get-AuthenticodeSignature -LiteralPath $f
+              "sig status=$($sig.Status) type=$($sig.SignatureType) subject=$($sig.SignerCertificate.Subject)"
+            }
+          }
+          $env:PATH = @((Join-Path $PWD $env:PY_DIR), "$sys\System32", "$sys", "$sys\System32\Wbem", "$sys\System32\WindowsPowerShell\v1.0") -join ';'
+          & "$env:PY_DIR\python.exe" -s -c "import portable_assets as p; [print(n, '->', p._system_dll(n, 0x8664, {})) for n in ('icu.dll','icuuc.dll','propsys.dll')]"
+
       - name: Build portable package
         run: |
           $netrc = Join-Path $env:RUNNER_TEMP 'netrc'
