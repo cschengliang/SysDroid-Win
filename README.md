@@ -12,6 +12,8 @@ lib\python-3.14.8-embed-amd64\python.exe your_script.py
 
 ## 安装依赖
 
+> `lib/`（嵌入式 Python）和 `tool/`（Scrcpy、Windows Terminal）不在 git 中。克隆仓库后，请先按 [依赖说明（DEPENDENCIES.md）](DEPENDENCIES.md) 补齐环境。只想使用软件的话，请直接从 [Releases](https://github.com/cschengliang/SysDroid-Win/releases) 下载便携版。
+
 pip 已配置为使用清华 PyPI 镜像：
 
 ```bat
@@ -21,7 +23,7 @@ lib\python-3.14.8-embed-amd64\python.exe -m pip install 包名
 桌面程序依赖 `PySide6` 和 `adbutils`；Python 标准库不包含 ADB 客户端：
 
 ```bat
-lib\python-3.14.8-embed-amd64\python.exe -m pip install PySide6 adbutils
+lib\python-3.14.8-embed-amd64\python.exe -m pip install -r requirements.txt
 ```
 
 查看 Python 和 pip 版本：
@@ -180,6 +182,8 @@ lib\python-3.14.8-embed-amd64\python.exe -s -m pytest tests -q
 真实设备与 Scrcpy 的端到端验证需在桌面程序中执行：刷新设备、运行参数化命令、清空执行历史、启动独立窗口或录制并停止，检查真实输出及录制文件。
 
 ## Windows x64 便携发行版
+
+发行包发布在 [GitHub Releases](https://github.com/cschengliang/SysDroid-Win/releases)。
 
 解压 `AndroidToolbox-win-x64.zip` 后，双击完整目录中的 `AndroidToolbox.exe`。不需要安装 Python、Qt、ADB、Scrcpy 或 Windows Terminal；不要只复制 EXE 或删除 `_internal`、`tool`、`licenses`。目标为 Windows 11 x64；USB 驱动仍由用户安装。运行数据默认写入 `%LOCALAPPDATA%\AndroidToolbox`，不会混入发行包。
 
