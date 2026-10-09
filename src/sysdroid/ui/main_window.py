@@ -36,6 +36,13 @@ DISCONNECTED = "disconnected"
 STATE_LABELS = {DISCONNECTED: "已断开"}
 
 
+def device_label(device: Device) -> str:
+    """Selector text: model first (when known), then serial and state."""
+    state = STATE_LABELS.get(device.state, device.state)
+    name = f"{device.model} ({device.serial})" if device.model else device.serial
+    return f"{name} · {state}"
+
+
 def _setting_bool(value, default: bool) -> bool:
     if isinstance(value, bool):
         return value
@@ -746,11 +753,14 @@ class AndroidToolboxWindow(QMainWindow):
         self.device_selector.clear()
         self.device_table.setRowCount(len(devices))
         for row, device in enumerate(devices):
-            self.device_selector.addItem(f"{device.serial} · {device.state}", device.serial)
+            self.device_selector.addItem(device_label(device), device.serial)
+            self.device_selector.setItemData(row, " · ".join(
+                value for value in (device.serial, device.model, device.product, device.transport) if value),
+                Qt.ItemDataRole.ToolTipRole)
             for col, value in enumerate((device.serial, device.state, device.model, device.product, device.device, device.transport)):
                 self.device_table.setItem(row, col, QTableWidgetItem(value))
         if placeholder is not None:
-            self.device_selector.addItem(f"{previous} · {STATE_LABELS[DISCONNECTED]}", previous)
+            self.device_selector.addItem(device_label(placeholder), previous)
         if not devices and placeholder is None:
             self.device_selector.addItem("未发现设备", "")
         index = self.device_selector.findData(previous) if previous else -1
