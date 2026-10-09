@@ -680,6 +680,7 @@ def test_reading_loads_raw_proposal_but_refresh_and_filter_do_not_change_it(sett
     page.table.selectRow(page._row_by_name["existing"])
     finish_read(settings_runner, "existing", raw)
     assert page._proposed_value == raw
+    assert page.json_mode.isChecked()  # \r cannot round-trip through plain text
     assert json.loads(page.value_field.toolTip().split("\n", 1)[1]) == raw
     items = [page.table.item(row, column) for row in range(2) for column in range(2)]
     page.value_field.setPlainText(json.dumps("new proposal"))
@@ -699,10 +700,10 @@ def test_reading_loads_raw_proposal_but_refresh_and_filter_do_not_change_it(sett
 def test_read_result_cannot_overwrite_edits_made_while_in_flight(settings_runner, settings_page, edit):
     page = settings_page
     page.name_field.setText("existing")
-    page.value_field.setPlainText(json.dumps("keep me"))
+    page.value_field.setPlainText("keep me")
     page._read()
     if edit == "proposal":
-        page.value_field.setPlainText(json.dumps("edited during read"))
+        page.value_field.setPlainText("edited during read")
     elif edit == "name":
         page.name_field.setText("other")
     else:
@@ -716,7 +717,7 @@ def test_read_result_cannot_overwrite_edits_made_while_in_flight(settings_runner
 def test_change_pre_read_updates_current_value_without_replacing_proposal(settings_runner, settings_page, monkeypatch):
     page = settings_page
     page.name_field.setText("existing")
-    page.value_field.setPlainText(json.dumps("wanted"))
+    page.value_field.setPlainText("wanted")
     observed = []
     def reject(dialog):
         observed.append((page.controller.values["existing"].value, page._proposed_value))
@@ -733,7 +734,7 @@ def test_confirmation_switchback_or_intervening_task_never_submits_stale_change(
         settings_runner, settings_page, monkeypatch, change):
     page = settings_page
     page.name_field.setText("existing")
-    page.value_field.setPlainText(json.dumps("wanted"))
+    page.value_field.setPlainText("wanted")
     def change_then_accept(dialog):
         if change == "namespace":
             page.namespace_combo.setCurrentText("global")
@@ -748,7 +749,7 @@ def test_confirmation_switchback_or_intervening_task_never_submits_stale_change(
         elif change == "name":
             page.name_field.setText("other")
         elif change == "proposal":
-            page.value_field.setPlainText(json.dumps("different"))
+            page.value_field.setPlainText("different")
         elif change == "page":
             page.set_active(False)
             page.set_active(True)
@@ -794,9 +795,9 @@ def test_pre_read_edit_and_pre_read_failure_never_open_confirmation(settings_run
     opened = []
     monkeypatch.setattr(QMessageBox, "exec", lambda dialog: opened.append(True) or QMessageBox.StandardButton.Yes)
     page.name_field.setText("existing")
-    page.value_field.setPlainText(json.dumps("wanted"))
+    page.value_field.setPlainText("wanted")
     page._write()
-    page.value_field.setPlainText(json.dumps("changed during pre-read"))
+    page.value_field.setPlainText("changed during pre-read")
     finish_read(settings_runner, "existing", "latest")
     assert not opened and mutation_count(settings_runner) == 0
     page._delete()
@@ -816,6 +817,7 @@ def test_provider_null_is_never_acknowledged_as_preserved_literal_text(settings_
 @pytest.mark.parametrize("raw", ["a\r\nb", "a\u00a0b", "a\u2028b\u2029c"])
 def test_editing_proposal_preserves_untouched_literal_characters(settings_page, raw):
     page = settings_page
+    page.json_mode.setChecked(True)
     page._set_proposed_value(raw)
     cursor = page.value_field.textCursor()
     cursor.setPosition(len(page.value_field.toPlainText()) - 1)
@@ -827,6 +829,7 @@ def test_editing_proposal_preserves_untouched_literal_characters(settings_page, 
 def test_invalid_json_cannot_submit_previous_valid_proposal(settings_runner, settings_page):
     page = settings_page
     page.name_field.setText("existing")
+    page.json_mode.setChecked(True)
     page._set_proposed_value("valid")
     count = len(settings_runner.requests)
     page.value_field.setPlainText('"unterminated')
@@ -847,3 +850,74 @@ def test_loader_noise_on_stderr_does_not_fail_a_verified_refresh(settings_runner
         settings_runner.finish(task, output, noise)
     assert controller.values == {"key": SettingValue(True, "value")}
     assert not controller.error and not controller.busy
+
+
+def test_plain_text_mode_is_default_and_round_trips_multiline_text(settings_page):
+    page = settings_page
+    assert not page.json_mode.isChecked()
+    page.value_field.setPlainText('  "quoted" 中文\nsecond line\u00a0 ')
+    assert page._proposed_value == '  "quoted" 中文\nsecond line\u00a0 '
+    assert not page._proposal_error
+    page.value_field.setPlainText("")
+    assert page._proposed_value == "" and "空字符串" in page.value_note.text()
+
+
+def test_json_mode_toggle_rerenders_and_refuses_lossy_plain_mode(settings_page):
+    page = settings_page
+    page.value_field.setPlainText("a\nb")
+    page.json_mode.setChecked(True)
+    assert page.value_field.toPlainText() == json.dumps("a\nb") and page._proposed_value == "a\nb"
+    page.json_mode.setChecked(False)
+    assert page.value_field.toPlainText() == "a\nb"
+    page._set_proposed_value("x\ry")
+    assert page.json_mode.isChecked()
+    page.json_mode.setChecked(False)
+    assert page.json_mode.isChecked() and "JSON" in page.error_label.text()
+    assert page._proposed_value == "x\ry"
+
+
+def test_invalid_json_switching_back_to_plain_restores_last_valid_proposal(settings_page):
+    page = settings_page
+    page.json_mode.setChecked(True)
+    page._set_proposed_value("valid")
+    page.value_field.setPlainText('"broken')
+    assert page._proposal_error
+    page.json_mode.setChecked(False)
+    assert not page._proposal_error and page.value_field.toPlainText() == "valid"
+
+
+@pytest.mark.parametrize("accept", [True, False])
+def test_preset_confirms_and_writes_all_names_in_one_round_trip(settings_runner, settings_page, monkeypatch, accept):
+    from sysdroid.ui.pages.settings_page import SETTINGS_PRESETS
+    page = settings_page
+    prompts = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: prompts.append(args[2]) or (
+        QMessageBox.StandardButton.Yes if accept else QMessageBox.StandardButton.No))
+    group, label, namespace, changes = next(p for p in SETTINGS_PRESETS if p[1] == "0.5x")
+    count = len(settings_runner.requests)
+    assert page.apply_preset(f"{group} · {label}", namespace, list(changes)) is accept
+    assert "window_animation_scale" in prompts[0] and "global" in prompts[0]
+    if not accept:
+        assert len(settings_runner.requests) == count
+        return
+    device = DeviceSettings()
+    device.answer(settings_runner)
+    assert len(settings_runner.requests) == count + 1 and mutation_count(settings_runner) == 3
+    assert all(device.values[(0, "global", name)] == "0.5" for name, _ in changes)
+    assert "已写入 3 项" in page.controller.status
+
+
+def test_presets_cover_common_developer_toggles():
+    from sysdroid.ui.pages.settings_page import SETTINGS_PRESETS
+    names = {name for *_rest, changes in SETTINGS_PRESETS for name, _value in changes}
+    assert {"window_animation_scale", "transition_animation_scale", "animator_duration_scale",
+            "show_touches", "stay_on_while_plugged_in"} <= names
+    assert all(len(changes) <= 4 for *_rest, changes in SETTINGS_PRESETS)
+
+
+def test_preset_refused_while_busy(settings_runner, settings_page, monkeypatch):
+    page = settings_page
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: pytest.fail("should not ask"))
+    page._refresh()
+    assert not page.apply_preset("x", "global", [("a", "1")])
+    assert page.error_label.text()
