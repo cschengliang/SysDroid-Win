@@ -921,3 +921,16 @@ def test_preset_refused_while_busy(settings_runner, settings_page, monkeypatch):
     page._refresh()
     assert not page.apply_preset("x", "global", [("a", "1")])
     assert page.error_label.text()
+
+
+def test_settings_table_menu_and_export_use_raw_values(settings_page, tmp_path):
+    import csv
+    page = settings_page
+    row = page._row_by_name["existing"]
+    menu = page.table_tools.build_menu(row, 1)
+    texts = [action.text() for action in menu.actions() if action.text()]
+    assert texts[:4] == ["读取当前值", "复制名称", "复制原始值", "复制为 settings put 命令（设备 shell）"]
+    assert page.table_tools.cell_text(row, 1) == "initial existing"
+    path = page.table_tools.export_csv(str(tmp_path / "s.csv"))
+    with open(path, encoding="utf-8-sig", newline="") as stream:
+        assert ["existing", "initial existing"] in list(csv.reader(stream))

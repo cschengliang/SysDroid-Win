@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import bisect
 import json
+import shlex
 from dataclasses import dataclass
 
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
@@ -15,6 +16,7 @@ from sysdroid.core.backend import TaskRunner
 from sysdroid.core.settings import SettingsController, SettingValue
 from sysdroid.core.users import AndroidUserController
 from sysdroid.ui import kit as ui_kit
+from sysdroid.ui.tables import TableTools
 def _note(text: str = "") -> QLabel:
     label = QLabel(text)
     label.setWordWrap(True)
@@ -199,6 +201,8 @@ class SettingsPage(QWidget):
         self.table.setMinimumWidth(240)
         self.table.setMinimumHeight(100)
         self.table.itemSelectionChanged.connect(self._selection_changed)
+        self.table_tools = TableTools(self.table, export_name="settings", menu=self._extend_menu,
+                                      refresh=self.refresh_button.click, search=self.search, text=self._cell_text)
         self.splitter.addWidget(self.table)
         ui_kit.install_empty_state(self.table, lambda: ui_kit.device_empty_text(
             self.controller.serial, self.controller.device_state, self.table, self.status_label.text(), "暂无设置项 · 点击「刷新名称和值」读取"),
@@ -277,6 +281,32 @@ class SettingsPage(QWidget):
         layout.addWidget(self.splitter, 1)
         self._update_mode_hint()
         self._update_proposal_note()
+
+    def _row_name(self, row: int) -> str:
+        item = self.table.item(row, 0)
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else ""
+
+    def _cell_text(self, row: int, column: int) -> str | None:
+        if column != 1:
+            return None
+        observed = self.controller.values.get(self._row_name(row))
+        return observed.value if observed is not None and observed.exists and observed.value is not None else ""
+
+    def _extend_menu(self, menu: QMenu, row: int) -> None:
+        name = self._row_name(row)
+        if not name:
+            return
+        if self._selected_name() != name:
+            self.table.selectRow(row)
+        menu.addAction("读取当前值", self._read).setEnabled(self.read_button.isEnabled())
+        menu.addAction("复制名称", lambda: QApplication.clipboard().setText(name))
+        observed = self.controller.values.get(name)
+        if observed is not None and observed.exists and observed.value is not None:
+            value = observed.value
+            menu.addAction("复制原始值", lambda: QApplication.clipboard().setText(value))
+            menu.addAction("复制为 settings put 命令（设备 shell）", lambda: QApplication.clipboard().setText(shlex.join(
+                ["settings", "put", "--user", str(self.controller.user_id),
+                 self.controller.namespace, name, value])))
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
