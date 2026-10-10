@@ -5,19 +5,32 @@ import shlex
 
 from PySide6.QtCore import QObject, Signal
 
-from sysdroid.core.backend import Task, TaskRunner
+from sysdroid.core.backend import Task, TaskRunner, significant_stderr
+
+
+_USER_RECORD = re.compile(r"UserInfo\{([0-9]+):(.*):([0-9a-fA-F]+)\}")
 
 
 def parse_users(output: str) -> dict[int, str]:
+    """Parse `pm list users`.
+
+    Vendors add banner lines before the header and decorate records
+    (" running", " (current)", extra flags), so unknown lines are skipped;
+    only the header, at least one record and unique IDs are required.
+    """
     lines = output.splitlines()
-    if not lines or lines[0].strip() != "Users:":
+    header = next((index for index, line in enumerate(lines) if line.strip() == "Users:"), None)
+    if header is None:
         raise ValueError("pm list users 输出缺少 Users 标头")
     users: dict[int, str] = {}
-    for line in lines[1:]:
-        match = re.fullmatch(r"\s*UserInfo\{([0-9]+):(.+):[0-9a-fA-F]+\}(?:\s+running)?\s*", line)
-        if not match or int(match[1]) in users:
-            raise ValueError(f"用户记录无效或重复：{line!r}")
-        users[int(match[1])] = match[2]
+    for line in lines[header + 1:]:
+        match = _USER_RECORD.search(line)
+        if not match:
+            continue
+        user_id = int(match[1])
+        if user_id in users:
+            raise ValueError(f"用户记录重复：{line!r}")
+        users[user_id] = match[2]
     if not users:
         raise ValueError("设备未提供可用 Android 用户")
     return users
@@ -98,7 +111,8 @@ class AndroidUserController(QObject):
     def _finished(self, task: Task) -> None:
         if task.id != self._task_id:
             return
-        valid = task.status == "succeeded" and task.exit_code == 0 and not task.stderr
+        # stdout is parsed strictly, so loader noise on stderr is not a failure by itself.
+        valid = task.status == "succeeded" and task.exit_code == 0 and not significant_stderr(task.stderr)
         details = f"{task.status} / exit {task.exit_code}\n{task.stdout}{task.stderr}"
         if self._phase == "list":
             try:

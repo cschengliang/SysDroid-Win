@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 from PySide6.QtCore import QObject, Signal
 
-from sysdroid.core.backend import OUTPUT_LIMIT, TRUNCATED, Task, TaskRunner
+from sysdroid.core.backend import OUTPUT_LIMIT, TRUNCATED, Task, TaskRunner, significant_stderr
 
 
 _NAMESPACES = frozenset({"system", "secure", "global"})
@@ -359,7 +359,7 @@ class SettingsController(QObject):
         request = self._request
         if request is None or task.id != self.task_id or request.generation != self._generation:
             return
-        if (task.status != "succeeded" or task.exit_code != 0 or task.stderr or
+        if (task.status != "succeeded" or task.exit_code != 0 or significant_stderr(task.stderr) or
                 (len(task.stdout) >= OUTPUT_LIMIT and task.stdout.startswith(TRUNCATED))):
             self._fail(request, _task_details(task))
             return

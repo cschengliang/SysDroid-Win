@@ -87,14 +87,16 @@ start_android_toolbox.bat
 
 - “设备连接”页从上到下依次为“当前设备 / ADB 连接”、“ADB 特权状态 / 快捷操作”和设备列表；主页仅在特权状态区域保留一个“ADB Root”按钮。窗口高度不足时可滚动查看设备列表。
 - 自动执行 `adb devices -l`，展示真实 Serial、状态、型号、Product、Device 和 Transport；表格双击或右键设置全局设备，支持复制 Serial。
-- 设备命令通过 Python `adbutils` 连接 ADB Server 执行，不再为每条设备命令创建 `adb` 子进程；支持无线连接/断开、Root、Remount、Shell、文件传输和应用管理。Shell 保留协议返回的 stdout/stderr 与退出码；其他操作将库返回值和异常映射为任务输出与成功/失败状态。
-服务器版本查询 / 启动及 `install` / `install-multiple` 使用已选定的绝对 ADB 可执行文件；安装路径是独立 argv，不使用 adbutils 隐式卸载重装的安装器，不重试、下载 URL、自动降级或授予权限。超时保留已收到的两路输出，不代表设备端动作已经撤销。其余设备协议操作使用 adbutils；创建客户端前再次校验统一路径，禁止偷偷选择其他 ADB。
-- 无线连接与断开、Server 启动/重启、版本查询、Root、Remount 均执行真实 ADB。Root/Remount 与 Server 重启前需确认；USB 设备不能通过 `adb disconnect` 断开；缺失 `ADB` 可执行文件或设备离线会显示真实错误。
+- 通过 ADB Server 的 `host:track-devices` 实时跟踪插拔与状态变化并自动刷新列表（自动刷新不进入任务列表和日志）；跟踪不会主动启动 Server，Server 停止后每隔几秒重试。
+- 当前设备从列表消失时保持选中并标记为“已断开”，不会自动切换到其他设备；设备重新上线后各页面自动恢复。选中在线设备（或当前设备重新上线）时自动读取特权状态，失败会在状态卡片和日志中明确显示。
+- 设备命令通过 Python `adbutils` 连接 ADB Server 执行，不再为每条设备命令创建 `adb` 子进程；支持无线连接/断开、Root、Remount、Shell、文件传输和应用管理。Shell / logcat 直接使用 shell v2 协议边执行边显示 stdout/stderr，保留退出码；不支持 shell v2 的旧设备回退到退出码标记。`exec-out` 按原始字节读取：文本直接显示，二进制输出（PNG、含 NUL 等）保存到数据目录 `exec-out\` 下并显示路径。connect、Root、Remount、卸载等只返回文本的服务按已知成功回复判定成功/失败。
+服务器版本查询 / 启动及 `install` / `install-multiple` 使用已选定的绝对 ADB 可执行文件；安装路径是独立 argv，不使用 adbutils 隐式卸载重装的安装器，不重试、下载 URL、自动降级或授予权限。安装输出实时显示，停止时结束 adb 进程。超时保留已收到的两路输出，不代表设备端动作已经撤销。其余设备协议操作使用 adbutils；创建客户端前再次校验统一路径，禁止偷偷选择其他 ADB。
+- 无线连接与断开、Server 启动/重启、版本查询、Root、Remount、重启设备（系统 / Recovery / Bootloader）均执行真实 ADB。Root/Remount/重启与 Server 重启前需确认；Root 与重启系统后会等待设备重新上线（分别最长 30 / 180 秒）再读取状态，超时会提示；Remount 提示需要重启时会在日志中说明；USB 设备不能通过 `adb disconnect` 断开；缺失 `ADB` 可执行文件或设备离线会显示真实错误。
 - 特权状态读取设备 UID、`ro.debuggable`、Android 版本和系统挂载信息，不自动提权或修改设备。
 - “设备连接”页的“打开终端”、工具菜单“打开内置 ADB 终端”和工具栏“ADB 终端”统一启动项目内的 `tool/terminal-1.25.2733.0/WindowsTerminal.exe`，在独立窗口中运行当前在线设备的交互式 `adb -s <Serial> shell`。终端路径相对项目定位，不依赖系统安装的 Windows Terminal、PATH 中的 `wt.exe` 或本地 PowerShell；交互式连接仍需上述 ADB 可执行文件。未选在线设备、内置终端缺失或 ADB 路径无效时显示错误，不回退到外部终端。
 - 交互式终端会话独立于工具箱，不纳入活动任务或历史；切换全局设备不改变已打开终端的目标。输入 `exit` 或关闭终端窗口结束会话。
 活动日志支持级别筛选、自动滚动、清空和收起。设备功能页查看输出时保留当前列表 / 编辑器，仅切换底栏；“任务输出”导航可独立占满工作区，展示 ADB、Scrcpy 等任务的输出，而非仅 ADB 原文。底栏拖动比例保存于工作区，日志收起状态不再由高度推断。
-- stdout 与 stderr 分开展示，记录真实状态、耗时与退出码；普通进程支持停止、确认后的强制结束和复制输出，停止后 4 秒仍不退出将强制结束，并在 stderr 说明风险；正在写入的文件可能不完整。adbutils 已发出的 ADB 请求不能被强制中断，停止或超时会等待当前请求返回后记录最终状态。
+- stdout 与 stderr 分开展示，记录真实状态、耗时与退出码；普通进程支持停止、确认后的强制结束和复制输出，停止后 4 秒仍不退出将强制结束，并在 stderr 说明风险；正在写入的文件可能不完整。Shell / exec-out / logcat 与 adb.exe 子进程（安装等）在停止或超时时立即关闭连接或结束进程，已收到的输出保留；push / pull 等其他 adbutils 请求无法中途中断，会等待请求返回后记录最终状态。
 
 ### 命令库与执行历史
 
@@ -189,7 +191,7 @@ start_android_toolbox.bat
 
 ### 数据与验证
 
-用户数据默认保存到 `%LOCALAPPDATA%\AndroidToolbox`：`commands.json`（命令及保留的旧版工作流数据）、`history.json`（最近 200 条普通已结束任务）和 `workspace.ini`（窗口与面板布局、进程表显示列）。可用 `ANDROID_TOOLBOX_DATA_DIR` 指定其他目录。瞬时采样仍支持超时 / 停止 / 原始输出，但不写历史、不抢 TaskPanel 选择；内存保留最近 20 条已结束采样及当前固定查看的 1 条。每路完整输出为有截断标记的 2 MiB 字符尾部，界面同时限制 5000 文本块与字符数，隐藏输出只标脏，可见时按 50 ms 批量显示。
+用户数据默认保存到 `%LOCALAPPDATA%\AndroidToolbox`：`commands.json`（命令及保留的旧版工作流数据）、`history.json`（命令库执行的最近 200 条已结束任务；每路输出只保存最近 64 KiB，写盘合并后在后台线程完成，各页面内部查询不写历史）和 `workspace.ini`（窗口与面板布局、进程表显示列）。可用 `ANDROID_TOOLBOX_DATA_DIR` 指定其他目录。瞬时采样仍支持超时 / 停止 / 原始输出，但不写历史、不抢 TaskPanel 选择；内存保留最近 20 条已结束采样及当前固定查看的 1 条。每路完整输出为有截断标记的 2 MiB 字符尾部，界面同时限制 5000 文本块与字符数，隐藏输出只标脏，可见时按 50 ms 批量显示。
 
 损坏的命令库不会被静默覆盖，界面会显示只读错误；明确选择恢复后先保留唯一备份，再写默认命令库。历史文件读取失败也会保留原文件并报错，修复文件后重新启动。
 
