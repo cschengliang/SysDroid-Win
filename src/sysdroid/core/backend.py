@@ -20,10 +20,10 @@ from typing import Callable
 import adbutils
 from adbutils import AdbTimeout
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
+from sysdroid.core.data_dir import resolve_data_dir
 from sysdroid.runtime_paths import adb_executable, application_dir
 
-DATA_DIR = Path(os.environ.get("ANDROID_TOOLBOX_DATA_DIR") or
-                str(Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "AndroidToolbox"))
+DATA_DIR = resolve_data_dir()
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled", "timed_out"}
 STATUS_LABELS = {"starting": "启动中", "running": "运行中", "stopping": "停止中",
                  "succeeded": "成功", "failed": "失败", "cancelled": "已停止", "timed_out": "超时"}

@@ -2,7 +2,7 @@
 
 ## 1. 页面定位
 
-ADB 设备主页是 Android Toolbox 的设备连接、选择和基础操作入口。本文件记录当前 PySide6 桌面程序的设计，不描述 HTML 原型中的演示数据，也不新增尚未实现的功能。
+ADB 设备主页是 SysDroid 的设备连接、选择和基础操作入口。本文件记录当前 PySide6 桌面程序的设计，不描述 HTML 原型中的演示数据，也不新增尚未实现的功能。
 
 主要职责：
 
@@ -236,7 +236,7 @@ tool/terminal-1.25.2733.0/WindowsTerminal.exe
 
 | 文件 | 与主页设计的关系 |
 | --- | --- |
-| [android_toolbox.py](../android_toolbox.py) | 全局框架、主页布局、设备选择、连接、特权检测、日志及操作入口 |
+| [main_window.py](../../src/sysdroid/ui/main_window.py) | 全局框架、主页布局、设备选择、连接、特权检测、日志及操作入口 |
 | [android_backend.py](../android_backend.py) | ADB 设备解析、任务执行、结果与历史、内置终端启动 |
 | [task_panel.py](../task_panel.py) | 活动任务和完整 stdout / stderr 展示 |
 | [README.md](../README.md) | 运行环境、启动方式、ADB 配置和现有功能说明 |

@@ -53,7 +53,7 @@ def _setting_bool(value, default: bool) -> bool:
     return default
 
 
-class AndroidToolboxWindow(QMainWindow):
+class SysDroidWindow(QMainWindow):
     PAGE_INFO = {
         "home": ("设备连接", "连接、刷新并选择当前 ADB 设备；查看设备信息与特权状态。"),
         "commands": ("ADB 命令库", "管理与执行命令；预览参数后提交，查看真实任务输出与历史。"),

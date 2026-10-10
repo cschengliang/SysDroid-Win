@@ -35,24 +35,25 @@ lib\python-3.14.8-embed-amd64\python.exe -m pip --version
 
 配置文件位于 `lib/python-3.14.8-embed-amd64/pip.ini`。
 
-## Android Toolbox 桌面程序
+## SysDroid 桌面程序
 
 启动桌面界面：
 
 ```bat
-lib\python-3.14.8-embed-amd64\python.exe -s android_toolbox.py
+lib\python-3.14.8-embed-amd64\python.exe -s sysdroid.py
 ```
 
-也可以直接双击项目根目录下的 `start_android_toolbox.bat` 启动。脚本会自动定位嵌入式 Python 和应用入口，并在启动文件缺失时给出错误提示。
+也可以直接双击项目根目录下的 `start_sysdroid.bat` 启动。脚本会自动定位嵌入式 Python 和应用入口，并在启动文件缺失时给出错误提示。
 
-根目录的 `android_toolbox.py` 只是启动器：把 `src/` 加入 `sys.path` 后调用 `sysdroid.app.main()`。应用代码位于 `src/sysdroid/`（结构见下）。
+根目录的 `sysdroid.py` 只是启动器：把 `src/` 加入 `sys.path` 后调用 `sysdroid.app.main()`。应用代码位于 `src/sysdroid/`（结构见下）。
 
 ### 代码结构
 
 ```text
-android_toolbox.py          # 源码启动器（供 bat、README 命令和 PyInstaller spec 使用）
-start_android_toolbox.bat   # 双击启动
-AndroidToolbox.spec         # PyInstaller 配置
+sysdroid.py                 # 源码启动器（供 bat 和 README 命令使用；EXE 从 src/sysdroid/__main__.py 启动）
+start_sysdroid.bat          # 双击启动
+SysDroid.spec               # PyInstaller 配置（EXE 图标与版本信息）
+assets/                     # SysDroid.ico、icons/sysdroid-<尺寸>.png；icon-src/ 为 SVG 源与生成脚本
 src/sysdroid/
 ├─ app.py                   # main()：创建 QApplication、主题和主窗口
 ├─ app_info.py              # 名称与版本
@@ -60,7 +61,7 @@ src/sysdroid/
 ├─ core/                    # 不含界面的设备逻辑：backend（任务执行）、apks、commands、device_info（设备状态与无线调试）、devices、processes、props、settings、users
 └─ ui/                      # main_window、theme、kit（通用控件）、tables（通用表格交互）、task_panel
    └─ pages/                # 每个导航页一个模块
-scripts/                    # build_android_toolbox.py、portable_assets.py（构建与便携资源）
+scripts/                    # build_sysdroid.py、portable_assets.py（构建与便携资源）
 docs/design/                # 设计文档与 HTML 布局原型
 tests/                      # core/、ui/、packaging/
 ```
@@ -68,6 +69,8 @@ tests/                      # core/、ui/、packaging/
 桌面 Qt 程序提供“设备连接、ADB 命令库、系统属性、系统设置、应用包信息、进程监控、投屏与录屏、任务输出”八个页面。左侧按“设备工具 / 运行记录”分组；名称侧重实际用途，悬停可查看说明。“系统属性”对应 getprop / setprop，“系统设置”对应 Settings 名称空间，“应用包信息”查看、安装、管理与导出 APK，“投屏与录屏”使用 Scrcpy 独立窗口。使用 `windows11` 原生样式及浅色界面，页面标题与说明位于菜单所在顶行。
 
 导航使用统一线条图标：手机、命令终端、键值列表、齿轮、安装包、监控曲线、播放屏幕和输出文档。图标由 Qt 本地绘制并缓存，提供多倍像素与选中态配色，不依赖外部图标文件；左侧导航、“视图”菜单和相关工具栏入口共用名称与图标。
+
+应用图标是“液态玻璃”风格的机器人头像，面部为发绿光的 `>_` 终端屏幕，底板为品牌蓝 #2878b5。`assets/icons/` 中 16–256 px 的 PNG 组成窗口与任务栏图标（16 / 24 px 为简化版），`assets/SysDroid.ico` 嵌入 EXE；进程启动时设置 AppUserModelID `cschengliang.SysDroid`，源码运行时任务栏也按 SysDroid 归组。修改图标请编辑 `assets/icon-src/make_icon.py` 后重新生成（需 `resvg_py` 与 Pillow，仅用于生成，不属于运行或构建依赖）。
 
 ### 通用表格交互
 
@@ -87,7 +90,7 @@ ADB 默认仅使用应用自带的 `tool/scrcpy-win64-v5.0/adb.exe`，不查 PAT
 ```bat
 set "ADB=D:\Tools\platform-tools\adb.exe"
 set "ADBUTILS_ADB_PATH=%ADB%"
-start_android_toolbox.bat
+start_sysdroid.bat
 ```
 
 上述 ADB 路径是示例，需替换为实际安装位置。启动校验后将同一绝对路径用于 adbutils 自动启动 Server、命令预览、安装输运、Scrcpy 与独立 Terminal。保留 `ANDROID_ADB_SERVER_HOST` / `ANDROID_ADB_SERVER_PORT` 配置。配置失败不查询设备，日志保留可复制错误并禁用 ADB 入口，命令库本地浏览 / 编辑仍可用。源码启动使用 `-s`，不加载用户级 site-packages，也不修改开发环境的 `._pth`。
@@ -221,7 +224,7 @@ start_android_toolbox.bat
 
 ### 数据与验证
 
-用户数据默认保存到 `%LOCALAPPDATA%\AndroidToolbox`：`commands.json`（命令及工作流）、`command_params.json`（各命令上次使用的参数）、`scrcpy.json`（Scrcpy 启动配置）、`history.json`（命令库执行的最近 200 条已结束任务；每路输出只保存最近 64 KiB，写盘合并后在后台线程完成，各页面内部查询不写历史）和 `workspace.ini`（窗口与面板布局、进程表显示列与采样间隔）。可用 `ANDROID_TOOLBOX_DATA_DIR` 指定其他目录。瞬时采样仍支持超时 / 停止 / 原始输出，但不写历史、不抢 TaskPanel 选择；内存保留最近 20 条已结束采样及当前固定查看的 1 条。每路完整输出为有截断标记的 2 MiB 字符尾部，界面同时限制 5000 文本块与字符数，隐藏输出只标脏，可见时按 50 ms 批量显示。
+用户数据默认保存到 `%LOCALAPPDATA%\SysDroid`：`commands.json`（命令及工作流）、`command_params.json`（各命令上次使用的参数）、`scrcpy.json`（Scrcpy 启动配置）、`history.json`（命令库执行的最近 200 条已结束任务；每路输出只保存最近 64 KiB，写盘合并后在后台线程完成，各页面内部查询不写历史）和 `workspace.ini`（窗口与面板布局、进程表显示列与采样间隔）。可用 `SYSDROID_DATA_DIR` 指定其他目录（旧的 `ANDROID_TOOLBOX_DATA_DIR` 仍作为后备生效）。未指定目录时，首次启动会把旧版 `%LOCALAPPDATA%\AndroidToolbox` 中的数据（`exec-out` 除外）一次性复制到新目录：新目录里已有的文件不覆盖，旧目录保持不变，完成后写入 `.migrated-from-AndroidToolbox.json` 标记；复制失败不写标记，下次启动重试。瞬时采样仍支持超时 / 停止 / 原始输出，但不写历史、不抢 TaskPanel 选择；内存保留最近 20 条已结束采样及当前固定查看的 1 条。每路完整输出为有截断标记的 2 MiB 字符尾部，界面同时限制 5000 文本块与字符数，隐藏输出只标脏，可见时按 50 ms 批量显示。
 
 损坏的命令库不会被静默覆盖，界面会显示只读错误；明确选择恢复后先保留唯一备份，再写默认命令库。历史文件读取失败也会保留原文件并报错，修复文件后重新启动。
 
@@ -237,19 +240,19 @@ lib\python-3.14.8-embed-amd64\python.exe -s -m pytest tests -q
 
 发行包发布在 [GitHub Releases](https://github.com/cschengliang/SysDroid-Win/releases)。
 
-解压 `AndroidToolbox-win-x64.zip` 后，双击完整目录中的 `AndroidToolbox.exe`。不需要安装 Python、Qt、ADB、Scrcpy 或 Windows Terminal；不要只复制 EXE 或删除 `_internal`、`tool`、`licenses`。目标为 Windows 11 x64；USB 驱动仍由用户安装。运行数据默认写入 `%LOCALAPPDATA%\AndroidToolbox`，不会混入发行包。
+解压 `SysDroid-win-x64.zip` 后，双击完整目录中的 `SysDroid.exe`。不需要安装 Python、Qt、ADB、Scrcpy 或 Windows Terminal；不要只复制 EXE 或删除 `_internal`、`tool`、`licenses`。目标为 Windows 11 x64；USB 驱动仍由用户安装。运行数据默认写入 `%LOCALAPPDATA%\SysDroid`，不会混入发行包。
 
 构建使用当前嵌入式解释器；不修改开发环境的 `python314._pth`，不借用外部 Python，不复制整份 site-packages：
 
 ```bat
-lib\python-3.14.8-embed-amd64\python.exe -s scripts\build_android_toolbox.py
+lib\python-3.14.8-embed-amd64\python.exe -s scripts\build_sysdroid.py
 ```
 
-- `AndroidToolbox.spec` 使用 windowed / onedir，保留正常依赖 hook；仅移除未使用的 Addons、QML / Quick / WebEngine。实际依赖版本记录于 `requirements-runtime.txt`、`requirements-build.txt` 和 `build-info.json`。
-- 每次构建位于独占的 `build/android-toolbox/<UTC-UUID>`。优先从 `python314.zip` 提取标准库字节码供 Analysis 使用；确认为字节码收集失败时才取得严格匹配的 CPython 源码重试，不更换解释器。失败保留日志和阶段目录，不覆盖旧发行版。
+- `SysDroid.spec` 使用 windowed / onedir，保留正常依赖 hook；仅移除未使用的 Addons、QML / Quick / WebEngine。实际依赖版本记录于 `requirements-runtime.txt`、`requirements-build.txt` 和 `build-info.json`。
+- 每次构建位于独占的 `build/sysdroid/<UTC-UUID>`。优先从 `python314.zip` 提取标准库字节码供 Analysis 使用；确认为字节码收集失败时才取得严格匹配的 CPython 源码重试，不更换解释器。失败保留日志和阶段目录，不覆盖旧发行版。
 - 官方 Scrcpy / Terminal 归档校验固定 SHA-256；许可证、原始 NOTICE、匹配版本的 Qt / PySide 和 LGPL 依赖源码一并分发。`THIRD-PARTY-NOTICES.txt` 说明可替换的动态链接库和开源许可路径；不声称持有商业 Qt 许可。
 - PE 审计检查完整普通 / delay 导入及按名称 / ordinal 的转发导出，包含架构、导出符号、应用内搜索范围和 Windows 系统组件来源；导入解析上限按文件字节数设置，避免默认 8192 项上限截断大型 Qt 绑定，真实解析错误仍中止构建。VC 不从宿主系统目录补入；供应商自带文件记录实际来源。如确需另取 Microsoft REDIST，必须提供真实许可资格记录，不能以已安装运行库推定再分发资格。
-- 通过审计后生成 `dist/AndroidToolbox-win-x64/` 和 `.zip`；解压 ZIP 后核对完整目录树和逐文件 SHA-256，再提交发行产物。目录内 `SHA256SUMS.txt` 与旁边的 `.files.sha256`、`.zip.sha256` 用于校验；已有产物先保留备份，提交失败执行回滚。
+- 通过审计后生成 `dist/SysDroid-win-x64/` 和 `.zip`；解压 ZIP 后核对完整目录树和逐文件 SHA-256，再提交发行产物。目录内 `SHA256SUMS.txt` 与旁边的 `.files.sha256`、`.zip.sha256` 用于校验；已有产物先保留备份，提交失败执行回滚。
 
 已完成真实 GUI 的 30 分钟输出 / 页面切换 / 自动采样压力场景：两路输出各有 2 MiB 上限，300 次采样不灌入持久化任务历史，后段私有内存相对预热期增长约 9.54 MiB。该结果来自当前工作站和可牺牲模拟器，不代表任意实体设备、Windows 版本或干净主机均已实测。
 
@@ -257,7 +260,7 @@ lib\python-3.14.8-embed-amd64\python.exe -s scripts\build_android_toolbox.py
 
 ## HTML 布局原型
 
-可直接浏览 `docs/design/android_toolbox_layout.html` 查看推荐的 Windows 风格布局。原型包含分组导航、设备摘要卡、连接区、设备表格、快捷操作和可折叠活动日志。
+可直接浏览 `docs/design/sysdroid_layout.html` 查看推荐的 Windows 风格布局。原型包含分组导航、设备摘要卡、连接区、设备表格、快捷操作和可折叠活动日志。
 
 HTML 原型已进一步落实布局建议：顶部仅保留高频工具、左侧导航分组、当前设备摘要卡提供快捷操作、设备表格支持双击与右键菜单、日志面板支持级别筛选和自动滚动。
 

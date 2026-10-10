@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
+from pathlib import Path
 
-from PySide6.QtCore import QObject, QPointF, QRectF, QSettings, Qt, Signal
-from PySide6.QtGui import (QColor, QFont, QGuiApplication, QIcon, QLinearGradient, QPainter,
-                           QPainterPath, QPalette, QPen, QPixmap, QPolygonF)
+from PySide6.QtCore import QObject, QPointF, QRectF, QSettings, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPainter, QPalette, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import QApplication
+
+from sysdroid.runtime_paths import assets_dir
 
 MODES = ("system", "light", "dark")
 MODE_LABELS = {"system": "跟随系统", "light": "浅色", "dark": "深色"}
@@ -304,36 +306,21 @@ def line_icon(key: str, normal: QColor | str, selected: QColor | str | None = No
     return icon
 
 
-def app_icon_pixmap(size: int) -> QPixmap:
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    s = size / 64
-    painter.scale(s, s)
-    gradient = QLinearGradient(0, 0, 64, 64)
-    gradient.setColorAt(0, QColor("#2f86d1"))
-    gradient.setColorAt(1, QColor("#17558c"))
-    background = QPainterPath()
-    background.addRoundedRect(QRectF(2, 2, 60, 60), 14, 14)
-    painter.fillPath(background, gradient)
-    pen = QPen(QColor("#ffffff"), 3.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-    painter.setPen(pen)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.drawRoundedRect(QRectF(19, 10, 26, 44), 5, 5)  # phone body
-    painter.drawLine(QPointF(29, 47.5), QPointF(35, 47.5))
-    pen.setColor(QColor("#9fe870"))  # Android-green prompt
-    painter.setPen(pen)
-    painter.drawPolyline(QPolygonF([QPointF(25, 21), QPointF(30, 26), QPointF(25, 31)]))
-    painter.drawLine(QPointF(33, 32), QPointF(39, 32))
-    painter.end()
-    return pixmap
+APP_ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
-def app_icon() -> QIcon:
+def app_icon_files(directory: Path | None = None) -> dict[int, Path]:
+    """Bundled icon PNGs by size (assets/icons/sysdroid-<size>.png); missing sizes are skipped."""
+    folder = (directory if directory is not None else assets_dir()) / "icons"
+    files = {size: folder / f"sysdroid-{size}.png" for size in APP_ICON_SIZES}
+    return {size: path for size, path in files.items() if path.is_file()}
+
+
+def app_icon(directory: Path | None = None) -> QIcon:
+    """Multi-size application icon; Qt picks the hand-tuned 16/24 px masters for small sizes."""
     icon = QIcon()
-    for size in (16, 20, 24, 32, 40, 48, 64, 128, 256):
-        icon.addPixmap(app_icon_pixmap(size))
+    for size, path in app_icon_files(directory).items():
+        icon.addFile(str(path), QSize(size, size))
     return icon
 
 

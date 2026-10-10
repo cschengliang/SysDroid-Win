@@ -701,7 +701,7 @@ def stage_portable_assets(source_root: Path, release_root: Path, stage: Path) ->
     if audit["missing"]:
         raise RuntimeError("Portable PE dependency closure failed; required imports: " + json.dumps(audit["missing"], ensure_ascii=False))
     (release_root / "THIRD-PARTY-NOTICES.txt").write_text(
-        "Android Toolbox uses the Qt, PySide6 and Shiboken libraries under the applicable open-source LGPLv3 terms.\n"
+        "SysDroid uses the Qt, PySide6 and Shiboken libraries under the applicable open-source LGPLv3 terms.\n"
         "No commercial Qt entitlement is asserted. LGPLv3 and GPLv3 texts, original copyright notices, and\n"
         "corresponding tagged source archives are in licenses/Qt, licenses/PySide-shiboken and licenses/QtSvg.\n"
         "The dynamically linked libraries remain replaceable under _internal; close the application and preserve\n"
