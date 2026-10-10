@@ -53,5 +53,5 @@ def test_source_mode_resolves_the_repository_root_that_holds_tool_and_lib(monkey
 def test_frozen_mode_uses_the_executable_folder(monkeypatch, tmp_path):
     from sysdroid import runtime_paths
     monkeypatch.setattr(runtime_paths.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(runtime_paths.sys, "executable", str(tmp_path / "AndroidToolbox.exe"))
+    monkeypatch.setattr(runtime_paths.sys, "executable", str(tmp_path / "SysDroid.exe"))
     assert runtime_paths.application_dir() == tmp_path.resolve()
