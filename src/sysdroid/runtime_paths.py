@@ -19,6 +19,13 @@ def application_dir() -> Path:
     return Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else PROJECT_ROOT
 
 
+def assets_dir() -> Path:
+    """Bundled read-only assets (app icon): _internal/assets when frozen, else <repo>/assets."""
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", application_dir() / "_internal")).resolve() / "assets"
+    return PROJECT_ROOT / "assets"
+
+
 def _override(name: str, value: str) -> Path:
     selected = Path(value).expanduser()
     found = str(selected) if selected.is_file() else shutil.which(value)

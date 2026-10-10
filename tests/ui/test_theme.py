@@ -49,7 +49,7 @@ def test_invalid_persisted_mode_falls_back_to_system(qapp, tmp_path):
     assert theme.ThemeManager(settings).mode == "system"
 
 
-def test_drawn_icons_are_not_empty(qapp):
+def test_app_and_line_icons_are_not_empty(qapp):
     assert not theme.app_icon().isNull()
     for key in ("home", "refresh", "terminal", "info", "settings"):
         assert not theme.line_icon(key, "#000000", "#ffffff").isNull()
