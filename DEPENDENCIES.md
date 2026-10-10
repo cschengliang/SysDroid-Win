@@ -120,17 +120,20 @@ lib\python-3.14.8-embed-amd64\python.exe -s scripts\build_sysdroid.py
 **触发方式**
 
 - **手动构建（不发布）**：打开仓库的 **Actions** 页面，左侧选 **Build portable**，点 **Run workflow**，选好分支后运行。
-- **发版**：在本地打标签并推送，就会自动构建并创建 Release：
+- **发版（推荐）**：在仓库的 **Releases** 页面点 **Draft a new release**，新建或选择标签（任意名称，如 `v0.2.0` 或 `0.2`），填写说明后点 **Publish release**。发布后会自动构建该标签对应的代码，并把 zip 和 `.sha256` 上传到这个 Release，通常需要二三十分钟。保存为草稿不会触发，正式发布时才构建。
+- **发版（命令行）**：在本地打 `v*` 标签并推送，会自动构建并创建 Release；如果这个标签已经有 Release，就跳过创建，避免重复：
 
   ```bat
-  git tag v0.1.0
-  git push origin v0.1.0
+  git tag v0.2.0
+  git push origin v0.2.0
   ```
+
+- **给已有 Release 补传 / 重传文件**：编辑或重新保存 Release 不会再次触发构建。到 **Actions → Build portable → Run workflow**，在 `release_tag` 中填写这个 Release 的标签名后运行：会构建该标签的代码，并把文件上传到这个 Release，同名文件直接覆盖。也可以删除这个 Release 及其标签后重新发布。注意构建的是标签所指的提交，标签必须指向已包含当前构建脚本的代码。
 
 **流程**：从官方地址下载 Python 3.14.8 嵌入版、Scrcpy 5.0 和 Windows Terminal 1.25.2733.0，并逐个校验 SHA-256（不一致会直接失败），再执行 `pip install -r requirements.txt`（CI 不使用镜像）、`pytest`，最后运行 `scripts\build_sysdroid.py`。下载内容会缓存，下次构建更快。
 
 **产物在哪里**
 
-- 每次构建都会在该次运行页面底部的 **Artifacts** 里留下 `SysDroid-win-x64-<版本>`，包含 `SysDroid-win-x64-<版本>.zip` 及其 `.sha256` 校验文件。`<版本>` 在推送标签时是标签名（如 `v0.1.0`），手动构建时是提交的短 SHA。Artifact 默认保留 90 天。
-- 推送 `v*` 标签时，同样的文件还会附加到 [Releases](https://github.com/cschengliang/SysDroid-Win/releases) 中对应版本的页面，更新说明会根据提交记录自动生成。
+- 每次构建都会在该次运行页面底部的 **Artifacts** 里留下 `SysDroid-win-x64-<版本>`，包含 `SysDroid-win-x64-<版本>.zip` 及其 `.sha256` 校验文件。`<版本>` 在发版时是标签名去掉开头的 `v`（`v0.2.0` → `0.2.0`），其他构建是所构建提交的短 SHA。Artifact 默认保留 90 天。
+- 发版时，同样的文件还会上传到 [Releases](https://github.com/cschengliang/SysDroid-Win/releases) 中对应版本的页面；由推送 `v*` 标签创建的 Release，更新说明会根据提交记录自动生成。
 - 构建失败时，可以在 Artifacts 里下载 `build-logs-*`，查看 `failure.json` 和 PyInstaller 日志。
