@@ -10,7 +10,7 @@ TEXT_SUFFIXES = {".py", ".spec", ".bat", ".md", ".txt", ".yml", ".yaml", ".html"
 # Legacy folder / variable names that the migration and its docs must keep.
 ALLOWED = {
     "src/sysdroid/core/data_dir.py", "tests/core/test_data_dir.py",
-    "tests/packaging/test_sysdroid_naming.py", "README.md",
+    "tests/packaging/test_sysdroid_naming.py", "README.md", "docs/development.md",
 }
 LEGACY_TOKENS = ("AndroidToolbox", "ANDROID_TOOLBOX_DATA_DIR")
 
