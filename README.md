@@ -104,7 +104,7 @@ lib\python-3.14.8-embed-amd64\python.exe -s -m pytest tests -q
 lib\python-3.14.8-embed-amd64\python.exe -s scripts\build_sysdroid.py
 ```
 
-GitHub Actions 的 [Build portable](.github/workflows/build.yml) 工作流可手动触发构建 Artifact；推送 `v*` 标签时额外发布 Release。实现细节、各页面的行为约定与构建审计见 [开发说明](docs/development.md)。
+GitHub Actions 的 [Build portable](.github/workflows/build.yml) 工作流可手动触发构建 Artifact；在网页上发布 Release（任意标签名）或推送 `v*` 标签时，自动构建并把 zip 与 sha256 上传到对应的 Release。实现细节、各页面的行为约定与构建审计见 [开发说明](docs/development.md)。
 
 ## 项目结构
 
