@@ -1,6 +1,6 @@
 """Produce the Windows x64 portable directory, ZIP, and SHA-256 manifests.
 
-Entry (from the repository root): lib/python-3.14.8-embed-amd64/python.exe -s scripts/build_android_toolbox.py
+Entry (from the repository root): lib/python-3.14.8-embed-amd64/python.exe -s scripts/build_sysdroid.py
 The development interpreter, its _pth file, and installed packages are never changed.
 Each freeze attempt runs in a fresh instance of that same embedded interpreter.
 """
@@ -33,8 +33,8 @@ SOURCE_ROOT = SCRIPTS_DIR.parent
 PACKAGE_ROOT = SOURCE_ROOT / "src"
 EMBEDDED_ROOT = SOURCE_ROOT / "lib" / "python-3.14.8-embed-amd64"
 SITE_PACKAGES = EMBEDDED_ROOT / "Lib" / "site-packages"
-BUILD_ROOT = SOURCE_ROOT / "build" / "android-toolbox"
-RELEASE_NAME = "AndroidToolbox-win-x64"
+BUILD_ROOT = SOURCE_ROOT / "build" / "sysdroid"
+RELEASE_NAME = "SysDroid-win-x64"
 EXPECTED_PYTHON = (3, 14, 8)
 STDLIB_FAILURE_EXIT = 71
 QT_METADATA_EXCEPTION = (
@@ -121,7 +121,7 @@ def _build_lock():
         try:
             msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
         except OSError as exc:
-            raise BuildError("Another Android Toolbox release build is holding the build lock.") from exc
+            raise BuildError("Another SysDroid release build is holding the build lock.") from exc
         try:
             yield
         finally:
@@ -255,7 +255,7 @@ def _official_stdlib_fallback(stage: Path, reason: str) -> dict:
     cache.mkdir(exist_ok=True)
     archive = cache / f"Python-{version}.tar.xz"
     try:
-        request = Request(url, headers={"User-Agent": "AndroidToolbox-release-build"})
+        request = Request(url, headers={"User-Agent": "SysDroid-release-build"})
         with urlopen(request, timeout=120) as response, archive.open("wb") as writer:
             final_url = urlsplit(response.geturl())
             if final_url.scheme != "https" or final_url.hostname != "www.python.org":
@@ -348,8 +348,9 @@ def validate_stdlib_analysis(analysis, source_root: Path, stage: Path, stdlib: P
         path = Path(source).resolve()
         approved = _beneath(path, EMBEDDED_ROOT) or _beneath(path, stage)
         app_root = source_root / "src" / "sysdroid"
-        approved = approved or path == source_root / "android_toolbox.py"
         approved = approved or (_beneath(path, app_root) and path.suffix == ".py")
+        approved = approved or (path.parent == source_root / "assets" / "icons" and path.suffix == ".png"
+                                and path.name.startswith("sysdroid-"))
         if not approved:
             raise BuildError(f"Analysis collected a file outside approved embedded/application inputs: {name}: {path} ({kind})")
         if path.suffix.lower() in {".pyd", ".dll"} and _beneath(path, windows):
@@ -457,13 +458,13 @@ def _freeze_child(stage: Path, attempt: int) -> int:
     importlib.invalidate_caches()
     # PyInstaller's isolated child explicitly receives sys.path, so it also sees
     # the extracted packages despite the embedded interpreter ignoring PYTHONPATH.
-    os.environ["ANDROID_TOOLBOX_BUILD_STAGE"] = str(stage)
-    os.environ["ANDROID_TOOLBOX_BUILD_STDLIB"] = str(stdlib)
+    os.environ["SYSDROID_BUILD_STAGE"] = str(stage)
+    os.environ["SYSDROID_BUILD_STDLIB"] = str(stdlib)
     os.environ["PYINSTALLER_CONFIG_DIR"] = str(attempt_root / "pyinstaller-cache")
     os.environ["PYTHONNOUSERSITE"] = "1"
     os.environ.pop("PYTHONPATH", None)
     os.environ.pop("PYTHONHOME", None)
-    sys.modules["build_android_toolbox"] = sys.modules["__main__"]
+    sys.modules["build_sysdroid"] = sys.modules["__main__"]
     handler = logging.FileHandler(attempt_root / "pyinstaller.log", encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     logging.getLogger("PyInstaller").addHandler(handler)
@@ -474,7 +475,7 @@ def _freeze_child(stage: Path, attempt: int) -> int:
         config = get_config(upx_dir=None)
         config["cachedir"] = str(attempt_root / "pyinstaller-cache")
         run([
-            str(SOURCE_ROOT / "AndroidToolbox.spec"),
+            str(SOURCE_ROOT / "SysDroid.spec"),
             "--noconfirm", "--distpath", str(attempt_root / "dist"),
             "--workpath", str(attempt_root / "work"), "--log-level", "INFO",
         ], pyi_config=config)
@@ -548,7 +549,7 @@ def _copy_interpreter_licenses(release: Path, build: dict[str, metadata.Distribu
 
 
 def _validate_runtime(release: Path) -> None:
-    if not (release / "AndroidToolbox.exe").is_file():
+    if not (release / "SysDroid.exe").is_file():
         raise BuildError(f"COLLECT did not create the application executable: {release}")
     internal = release / "_internal"
     required = (
@@ -557,6 +558,8 @@ def _validate_runtime(release: Path) -> None:
         internal / "PySide6" / "plugins" / "platforms" / "qwindows.dll",
         internal / "PySide6" / "plugins" / "styles" / "qmodernwindowsstyle.dll",
         internal / "certifi" / "cacert.pem",
+        internal / "assets" / "icons" / "sysdroid-16.png",
+        internal / "assets" / "icons" / "sysdroid-256.png",
     )
     for path in required:
         if not path.is_file():
@@ -700,7 +703,7 @@ def _stage_vc_entitlement(stage: Path, supplied: Path | None) -> None:
             f"Microsoft VC redistribution requires the actual licensed builder's eligibility record: {path}. "
             "Provide edition, licensing_basis and license_terms_accepted=true; an installed runtime "
             "does not establish redistribution rights. Use --vc-entitlement <existing record> or place "
-            "it at build/android-toolbox/vc-license-entitlement.json. "
+            "it at build/sysdroid/vc-license-entitlement.json. "
             "See https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution"
         ) from exc
     if not isinstance(record, dict) or record.get("license_terms_accepted") is not True or not all(
@@ -743,7 +746,7 @@ def _build(vc_entitlement: Path | None = None) -> int:
                 "runtime_distributions": _distribution_info(runtime),
                 "build_distributions": _distribution_info(build),
                 "dependency_exceptions": [QT_METADATA_EXCEPTION],
-                "build_inputs": {path.name: _sha256(path) for path in (SOURCE_ROOT / "AndroidToolbox.spec", Path(__file__).resolve(), SCRIPTS_DIR / "portable_assets.py")},
+                "build_inputs": {path.name: _sha256(path) for path in (SOURCE_ROOT / "SysDroid.spec", Path(__file__).resolve(), SCRIPTS_DIR / "portable_assets.py", SOURCE_ROOT / "assets" / "SysDroid.ico")},
             }
             _json(release / "build-info.json", info)
             shutil.copy2(SOURCE_ROOT / "README.md", release / "README.md")

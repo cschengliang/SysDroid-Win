@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- SysDroid app icon (Clear Glass droid) · grid: tight. Light from top; layers: 1 background, 2 head, 3 screen, 4 prompt. -->
+  <defs>
+    <clipPath id="tileClip"><path d="M998.0,512.0 L997.9,604.8 L997.7,639.1 L997.3,664.8 L996.8,686.1 L996.1,704.6 L995.3,721.1 L994.3,736.2 L993.1,750.0 L991.8,762.9 L990.4,774.9 L988.8,786.3 L987.0,797.0 L985.1,807.2 L983.1,816.8 L980.8,826.1 L978.4,834.9 L975.9,843.3 L973.2,851.4 L970.3,859.2 L967.2,866.7 L964.0,873.8 L960.6,880.7 L957.1,887.3 L953.4,893.7 L949.5,899.8 L945.4,905.7 L941.1,911.4 L936.7,916.9 L932.0,922.1 L927.2,927.2 L922.1,932.0 L916.9,936.7 L911.4,941.1 L905.7,945.4 L899.8,949.5 L893.7,953.4 L887.3,957.1 L880.7,960.6 L873.8,964.0 L866.7,967.2 L859.2,970.3 L851.4,973.2 L843.3,975.9 L834.9,978.4 L826.1,980.8 L816.8,983.1 L807.2,985.1 L797.0,987.0 L786.3,988.8 L774.9,990.4 L762.9,991.8 L750.0,993.1 L736.2,994.3 L721.1,995.3 L704.6,996.1 L686.1,996.8 L664.8,997.3 L639.1,997.7 L604.8,997.9 L512.0,998.0 L419.2,997.9 L384.9,997.7 L359.2,997.3 L337.9,996.8 L319.4,996.1 L302.9,995.3 L287.8,994.3 L274.0,993.1 L261.1,991.8 L249.1,990.4 L237.7,988.8 L227.0,987.0 L216.8,985.1 L207.2,983.1 L197.9,980.8 L189.1,978.4 L180.7,975.9 L172.6,973.2 L164.8,970.3 L157.3,967.2 L150.2,964.0 L143.3,960.6 L136.7,957.1 L130.3,953.4 L124.2,949.5 L118.3,945.4 L112.6,941.1 L107.1,936.7 L101.9,932.0 L96.8,927.2 L92.0,922.1 L87.3,916.9 L82.9,911.4 L78.6,905.7 L74.5,899.8 L70.6,893.7 L66.9,887.3 L63.4,880.7 L60.0,873.8 L56.8,866.7 L53.7,859.2 L50.8,851.4 L48.1,843.3 L45.6,834.9 L43.2,826.1 L40.9,816.8 L38.9,807.2 L37.0,797.0 L35.2,786.3 L33.6,774.9 L32.2,762.9 L30.9,750.0 L29.7,736.2 L28.7,721.1 L27.9,704.6 L27.2,686.1 L26.7,664.8 L26.3,639.1 L26.1,604.8 L26.0,512.0 L26.1,419.2 L26.3,384.9 L26.7,359.2 L27.2,337.9 L27.9,319.4 L28.7,302.9 L29.7,287.8 L30.9,274.0 L32.2,261.1 L33.6,249.1 L35.2,237.7 L37.0,227.0 L38.9,216.8 L40.9,207.2 L43.2,197.9 L45.6,189.1 L48.1,180.7 L50.8,172.6 L53.7,164.8 L56.8,157.3 L60.0,150.2 L63.4,143.3 L66.9,136.7 L70.6,130.3 L74.5,124.2 L78.6,118.3 L82.9,112.6 L87.3,107.1 L92.0,101.9 L96.8,96.8 L101.9,92.0 L107.1,87.3 L112.6,82.9 L118.3,78.6 L124.2,74.5 L130.3,70.6 L136.7,66.9 L143.3,63.4 L150.2,60.0 L157.3,56.8 L164.8,53.7 L172.6,50.8 L180.7,48.1 L189.1,45.6 L197.9,43.2 L207.2,40.9 L216.8,38.9 L227.0,37.0 L237.7,35.2 L249.1,33.6 L261.1,32.2 L274.0,30.9 L287.8,29.7 L302.9,28.7 L319.4,27.9 L337.9,27.2 L359.2,26.7 L384.9,26.3 L419.2,26.1 L512.0,26.0 L604.8,26.1 L639.1,26.3 L664.8,26.7 L686.1,27.2 L704.6,27.9 L721.1,28.7 L736.2,29.7 L750.0,30.9 L762.9,32.2 L774.9,33.6 L786.3,35.2 L797.0,37.0 L807.2,38.9 L816.8,40.9 L826.1,43.2 L834.9,45.6 L843.3,48.1 L851.4,50.8 L859.2,53.7 L866.7,56.8 L873.8,60.0 L880.7,63.4 L887.3,66.9 L893.7,70.6 L899.8,74.5 L905.7,78.6 L911.4,82.9 L916.9,87.3 L922.1,92.0 L927.2,96.8 L932.0,101.9 L936.7,107.1 L941.1,112.6 L945.4,118.3 L949.5,124.2 L953.4,130.3 L957.1,136.7 L960.6,143.3 L964.0,150.2 L967.2,157.3 L970.3,164.8 L973.2,172.6 L975.9,180.7 L978.4,189.1 L980.8,197.9 L983.1,207.2 L985.1,216.8 L987.0,227.0 L988.8,237.7 L990.4,249.1 L991.8,261.1 L993.1,274.0 L994.3,287.8 L995.3,302.9 L996.1,319.4 L996.8,337.9 L997.3,359.2 L997.7,384.9 L997.9,419.2 Z"/></clipPath>
+    <clipPath id="headClip"><path d="M212,690 A300,300 0 0 1 812,690 L812,700 Q812,744 768,744 L256,744 Q212,744 212,700 Z" transform="translate(-92.0 -92.0) scale(1.1796)"/></clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5aaeea"/><stop offset="0.55" stop-color="#2878b5"/><stop offset="1" stop-color="#17507f"/>
+    </linearGradient>
+    <radialGradient id="bgBloom" cx="0.5" cy="0.62" r="0.5">
+      <stop offset="0" stop-color="#8fd0ff" stop-opacity="0.45"/><stop offset="1" stop-color="#8fd0ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bgRefract" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#bfe3ff"/><stop offset="0.6" stop-color="#5da9e2"/><stop offset="1" stop-color="#2a7cba"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.9"/><stop offset="0.25" stop-color="#ffffff" stop-opacity="0.25"/>
+      <stop offset="0.7" stop-color="#ffffff" stop-opacity="0.05"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.35"/>
+    </linearGradient>
+    <linearGradient id="headFrost" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/><stop offset="0.55" stop-color="#f1f6fb" stop-opacity="0.97"/>
+      <stop offset="1" stop-color="#cfe0ef" stop-opacity="0.92"/>
+    </linearGradient>
+    <linearGradient id="headClear" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/><stop offset="0.6" stop-color="#e8f4ff" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#d4ecff" stop-opacity="0.38"/>
+    </linearGradient>
+    <linearGradient id="edgeLight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="1"/><stop offset="0.35" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="0.8" stop-color="#ffffff" stop-opacity="0.1"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.7"/>
+    </linearGradient>
+    <linearGradient id="rod" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#d6e4f0"/><stop offset="0.45" stop-color="#ffffff"/><stop offset="1" stop-color="#b7c9d9"/>
+    </linearGradient>
+    <radialGradient id="orb" cx="0.4" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#c9ffdc"/><stop offset="0.5" stop-color="#3ddc84"/><stop offset="1" stop-color="#169a52"/>
+    </radialGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#123a33"/><stop offset="1" stop-color="#04120f"/>
+    </linearGradient>
+    <radialGradient id="screenBloom" cx="0.4" cy="0.6" r="0.6">
+      <stop offset="0" stop-color="#4dff8a" stop-opacity="0.3"/><stop offset="1" stop-color="#4dff8a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="screenGloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/><stop offset="0.45" stop-color="#ffffff" stop-opacity="0.04"/>
+      <stop offset="0.46" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="tileShadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#0b2236" flood-opacity="0.28"/>
+    </filter>
+    <filter id="headShadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#0a3358" flood-opacity="0.35"/>
+    </filter>
+    <filter id="softEdge" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7"/></filter>
+    <filter id="frost" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation="18"/></filter>
+    <filter id="inset" x="-10%" y="-10%" width="120%" height="130%">
+      <feOffset dy="10" in="SourceAlpha" result="o"/><feGaussianBlur stdDeviation="12" in="o" result="b"/>
+      <feComposite in="SourceAlpha" in2="b" operator="out" result="inv"/>
+      <feFlood flood-color="#000000" flood-opacity="0.7"/><feComposite operator="in" in2="inv" result="sh"/>
+      <feMerge><feMergeNode in="SourceGraphic"/><feMergeNode in="sh"/></feMerge>
+    </filter>
+    <filter id="bottomShade" x="-10%" y="-10%" width="120%" height="120%">
+      <feOffset dy="-16" in="SourceAlpha" result="o"/><feGaussianBlur stdDeviation="20" in="o" result="b"/>
+      <feComposite in="SourceAlpha" in2="b" operator="out" result="inv"/>
+      <feFlood flood-color="#1f4f7a" flood-opacity="0.12"/><feComposite operator="in" in2="inv" result="sh"/>
+      <feMerge><feMergeNode in="SourceGraphic"/><feMergeNode in="sh"/></feMerge>
+    </filter>
+    <filter id="glow" x="-30%" y="-60%" width="160%" height="220%">
+      <feGaussianBlur stdDeviation="14" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <g id="1-background">
+    <path d="M998.0,512.0 L997.9,604.8 L997.7,639.1 L997.3,664.8 L996.8,686.1 L996.1,704.6 L995.3,721.1 L994.3,736.2 L993.1,750.0 L991.8,762.9 L990.4,774.9 L988.8,786.3 L987.0,797.0 L985.1,807.2 L983.1,816.8 L980.8,826.1 L978.4,834.9 L975.9,843.3 L973.2,851.4 L970.3,859.2 L967.2,866.7 L964.0,873.8 L960.6,880.7 L957.1,887.3 L953.4,893.7 L949.5,899.8 L945.4,905.7 L941.1,911.4 L936.7,916.9 L932.0,922.1 L927.2,927.2 L922.1,932.0 L916.9,936.7 L911.4,941.1 L905.7,945.4 L899.8,949.5 L893.7,953.4 L887.3,957.1 L880.7,960.6 L873.8,964.0 L866.7,967.2 L859.2,970.3 L851.4,973.2 L843.3,975.9 L834.9,978.4 L826.1,980.8 L816.8,983.1 L807.2,985.1 L797.0,987.0 L786.3,988.8 L774.9,990.4 L762.9,991.8 L750.0,993.1 L736.2,994.3 L721.1,995.3 L704.6,996.1 L686.1,996.8 L664.8,997.3 L639.1,997.7 L604.8,997.9 L512.0,998.0 L419.2,997.9 L384.9,997.7 L359.2,997.3 L337.9,996.8 L319.4,996.1 L302.9,995.3 L287.8,994.3 L274.0,993.1 L261.1,991.8 L249.1,990.4 L237.7,988.8 L227.0,987.0 L216.8,985.1 L207.2,983.1 L197.9,980.8 L189.1,978.4 L180.7,975.9 L172.6,973.2 L164.8,970.3 L157.3,967.2 L150.2,964.0 L143.3,960.6 L136.7,957.1 L130.3,953.4 L124.2,949.5 L118.3,945.4 L112.6,941.1 L107.1,936.7 L101.9,932.0 L96.8,927.2 L92.0,922.1 L87.3,916.9 L82.9,911.4 L78.6,905.7 L74.5,899.8 L70.6,893.7 L66.9,887.3 L63.4,880.7 L60.0,873.8 L56.8,866.7 L53.7,859.2 L50.8,851.4 L48.1,843.3 L45.6,834.9 L43.2,826.1 L40.9,816.8 L38.9,807.2 L37.0,797.0 L35.2,786.3 L33.6,774.9 L32.2,762.9 L30.9,750.0 L29.7,736.2 L28.7,721.1 L27.9,704.6 L27.2,686.1 L26.7,664.8 L26.3,639.1 L26.1,604.8 L26.0,512.0 L26.1,419.2 L26.3,384.9 L26.7,359.2 L27.2,337.9 L27.9,319.4 L28.7,302.9 L29.7,287.8 L30.9,274.0 L32.2,261.1 L33.6,249.1 L35.2,237.7 L37.0,227.0 L38.9,216.8 L40.9,207.2 L43.2,197.9 L45.6,189.1 L48.1,180.7 L50.8,172.6 L53.7,164.8 L56.8,157.3 L60.0,150.2 L63.4,143.3 L66.9,136.7 L70.6,130.3 L74.5,124.2 L78.6,118.3 L82.9,112.6 L87.3,107.1 L92.0,101.9 L96.8,96.8 L101.9,92.0 L107.1,87.3 L112.6,82.9 L118.3,78.6 L124.2,74.5 L130.3,70.6 L136.7,66.9 L143.3,63.4 L150.2,60.0 L157.3,56.8 L164.8,53.7 L172.6,50.8 L180.7,48.1 L189.1,45.6 L197.9,43.2 L207.2,40.9 L216.8,38.9 L227.0,37.0 L237.7,35.2 L249.1,33.6 L261.1,32.2 L274.0,30.9 L287.8,29.7 L302.9,28.7 L319.4,27.9 L337.9,27.2 L359.2,26.7 L384.9,26.3 L419.2,26.1 L512.0,26.0 L604.8,26.1 L639.1,26.3 L664.8,26.7 L686.1,27.2 L704.6,27.9 L721.1,28.7 L736.2,29.7 L750.0,30.9 L762.9,32.2 L774.9,33.6 L786.3,35.2 L797.0,37.0 L807.2,38.9 L816.8,40.9 L826.1,43.2 L834.9,45.6 L843.3,48.1 L851.4,50.8 L859.2,53.7 L866.7,56.8 L873.8,60.0 L880.7,63.4 L887.3,66.9 L893.7,70.6 L899.8,74.5 L905.7,78.6 L911.4,82.9 L916.9,87.3 L922.1,92.0 L927.2,96.8 L932.0,101.9 L936.7,107.1 L941.1,112.6 L945.4,118.3 L949.5,124.2 L953.4,130.3 L957.1,136.7 L960.6,143.3 L964.0,150.2 L967.2,157.3 L970.3,164.8 L973.2,172.6 L975.9,180.7 L978.4,189.1 L980.8,197.9 L983.1,207.2 L985.1,216.8 L987.0,227.0 L988.8,237.7 L990.4,249.1 L991.8,261.1 L993.1,274.0 L994.3,287.8 L995.3,302.9 L996.1,319.4 L996.8,337.9 L997.3,359.2 L997.7,384.9 L997.9,419.2 Z" fill="url(#bg)" filter="url(#tileShadow)"/>
+    <g clip-path="url(#tileClip)">
+      <rect width="1024" height="1024" fill="url(#bgBloom)"/>
+    </g>
+    <path d="M998.0,512.0 L997.9,604.8 L997.7,639.1 L997.3,664.8 L996.8,686.1 L996.1,704.6 L995.3,721.1 L994.3,736.2 L993.1,750.0 L991.8,762.9 L990.4,774.9 L988.8,786.3 L987.0,797.0 L985.1,807.2 L983.1,816.8 L980.8,826.1 L978.4,834.9 L975.9,843.3 L973.2,851.4 L970.3,859.2 L967.2,866.7 L964.0,873.8 L960.6,880.7 L957.1,887.3 L953.4,893.7 L949.5,899.8 L945.4,905.7 L941.1,911.4 L936.7,916.9 L932.0,922.1 L927.2,927.2 L922.1,932.0 L916.9,936.7 L911.4,941.1 L905.7,945.4 L899.8,949.5 L893.7,953.4 L887.3,957.1 L880.7,960.6 L873.8,964.0 L866.7,967.2 L859.2,970.3 L851.4,973.2 L843.3,975.9 L834.9,978.4 L826.1,980.8 L816.8,983.1 L807.2,985.1 L797.0,987.0 L786.3,988.8 L774.9,990.4 L762.9,991.8 L750.0,993.1 L736.2,994.3 L721.1,995.3 L704.6,996.1 L686.1,996.8 L664.8,997.3 L639.1,997.7 L604.8,997.9 L512.0,998.0 L419.2,997.9 L384.9,997.7 L359.2,997.3 L337.9,996.8 L319.4,996.1 L302.9,995.3 L287.8,994.3 L274.0,993.1 L261.1,991.8 L249.1,990.4 L237.7,988.8 L227.0,987.0 L216.8,985.1 L207.2,983.1 L197.9,980.8 L189.1,978.4 L180.7,975.9 L172.6,973.2 L164.8,970.3 L157.3,967.2 L150.2,964.0 L143.3,960.6 L136.7,957.1 L130.3,953.4 L124.2,949.5 L118.3,945.4 L112.6,941.1 L107.1,936.7 L101.9,932.0 L96.8,927.2 L92.0,922.1 L87.3,916.9 L82.9,911.4 L78.6,905.7 L74.5,899.8 L70.6,893.7 L66.9,887.3 L63.4,880.7 L60.0,873.8 L56.8,866.7 L53.7,859.2 L50.8,851.4 L48.1,843.3 L45.6,834.9 L43.2,826.1 L40.9,816.8 L38.9,807.2 L37.0,797.0 L35.2,786.3 L33.6,774.9 L32.2,762.9 L30.9,750.0 L29.7,736.2 L28.7,721.1 L27.9,704.6 L27.2,686.1 L26.7,664.8 L26.3,639.1 L26.1,604.8 L26.0,512.0 L26.1,419.2 L26.3,384.9 L26.7,359.2 L27.2,337.9 L27.9,319.4 L28.7,302.9 L29.7,287.8 L30.9,274.0 L32.2,261.1 L33.6,249.1 L35.2,237.7 L37.0,227.0 L38.9,216.8 L40.9,207.2 L43.2,197.9 L45.6,189.1 L48.1,180.7 L50.8,172.6 L53.7,164.8 L56.8,157.3 L60.0,150.2 L63.4,143.3 L66.9,136.7 L70.6,130.3 L74.5,124.2 L78.6,118.3 L82.9,112.6 L87.3,107.1 L92.0,101.9 L96.8,96.8 L101.9,92.0 L107.1,87.3 L112.6,82.9 L118.3,78.6 L124.2,74.5 L130.3,70.6 L136.7,66.9 L143.3,63.4 L150.2,60.0 L157.3,56.8 L164.8,53.7 L172.6,50.8 L180.7,48.1 L189.1,45.6 L197.9,43.2 L207.2,40.9 L216.8,38.9 L227.0,37.0 L237.7,35.2 L249.1,33.6 L261.1,32.2 L274.0,30.9 L287.8,29.7 L302.9,28.7 L319.4,27.9 L337.9,27.2 L359.2,26.7 L384.9,26.3 L419.2,26.1 L512.0,26.0 L604.8,26.1 L639.1,26.3 L664.8,26.7 L686.1,27.2 L704.6,27.9 L721.1,28.7 L736.2,29.7 L750.0,30.9 L762.9,32.2 L774.9,33.6 L786.3,35.2 L797.0,37.0 L807.2,38.9 L816.8,40.9 L826.1,43.2 L834.9,45.6 L843.3,48.1 L851.4,50.8 L859.2,53.7 L866.7,56.8 L873.8,60.0 L880.7,63.4 L887.3,66.9 L893.7,70.6 L899.8,74.5 L905.7,78.6 L911.4,82.9 L916.9,87.3 L922.1,92.0 L927.2,96.8 L932.0,101.9 L936.7,107.1 L941.1,112.6 L945.4,118.3 L949.5,124.2 L953.4,130.3 L957.1,136.7 L960.6,143.3 L964.0,150.2 L967.2,157.3 L970.3,164.8 L973.2,172.6 L975.9,180.7 L978.4,189.1 L980.8,197.9 L983.1,207.2 L985.1,216.8 L987.0,227.0 L988.8,237.7 L990.4,249.1 L991.8,261.1 L993.1,274.0 L994.3,287.8 L995.3,302.9 L996.1,319.4 L996.8,337.9 L997.3,359.2 L997.7,384.9 L997.9,419.2 Z" fill="none" stroke="url(#rim)" stroke-width="6" transform="translate(512 512) scale(0.9938) translate(-512 -512)"/>
+  </g>
+
+  <g id="2-head" transform="translate(-92.0 -92.0) scale(1.1796)">
+    <g stroke="url(#rod)" stroke-linecap="round" stroke-width="34"><line x1="404" y1="440" x2="338" y2="282"/><line x1="620" y1="440" x2="686" y2="282"/></g>
+    <circle cx="332" cy="268" r="40" fill="url(#orb)"/><ellipse cx="322" cy="252" rx="17" ry="10" fill="#ffffff" fill-opacity="0.85"/><circle cx="332" cy="268" r="38.5" fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="3"/><circle cx="692" cy="268" r="40" fill="url(#orb)"/><ellipse cx="682" cy="252" rx="17" ry="10" fill="#ffffff" fill-opacity="0.85"/><circle cx="692" cy="268" r="38.5" fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="3"/>
+    <g filter="url(#headShadow)"><path d="M212,690 A300,300 0 0 1 812,690 L812,700 Q812,744 768,744 L256,744 Q212,744 212,700 Z" fill="url(#headClear)" filter="url(#bottomShade)"/></g>
+  </g>
+  <g clip-path="url(#headClip)"><rect x="0" y="0" width="1024" height="1024" fill="url(#bgRefract)" filter="url(#frost)"/></g>
+  <g transform="translate(-92.0 -92.0) scale(1.1796)">
+    <path d="M212,690 A300,300 0 0 1 812,690 L812,700 Q812,744 768,744 L256,744 Q212,744 212,700 Z" fill="url(#headClear)"/>
+    <path d="M212,690 A300,300 0 0 1 812,690 L812,700 Q812,744 768,744 L256,744 Q212,744 212,700 Z" fill="none" stroke="url(#edgeLight)" stroke-width="7"/>
+    <path d="M330,486 Q404,420 512,410" fill="none" stroke="#ffffff" stroke-opacity="0.95" stroke-width="18" stroke-linecap="round" filter="url(#softEdge)"/>
+  </g>
+
+  <g clip-path="url(#headClip)">
+    <path d="M212,690 A300,300 0 0 1 812,690 L812,700 Q812,744 768,744 L256,744 Q212,744 212,700 Z" transform="translate(-92.0 -92.0) scale(1.1796)" fill="none" stroke="#ffffff" stroke-opacity="0.75" stroke-width="46" filter="url(#softEdge)"/>
+  </g>
+
+  <g id="3-screen" transform="translate(-92.0 -92.0) scale(1.1796)">
+    <rect x="300" y="520" width="424" height="160" rx="72" fill="url(#screen)" filter="url(#inset)"/>
+    <rect x="300" y="520" width="424" height="160" rx="72" fill="url(#screenBloom)"/>
+  </g>
+
+  <g id="4-prompt" transform="translate(-92.0 -92.0) scale(1.1796)">
+    <g fill="none" stroke="#4dff8a" stroke-linecap="round" stroke-linejoin="round" stroke-width="30" filter="url(#glow)"><polyline points="372,558 436,600 372,642"/><line x1="470" y1="642" x2="566" y2="642"/></g>
+    <g fill="none" stroke="#e4ffee" stroke-linecap="round" stroke-linejoin="round" stroke-width="11"><polyline points="372,558 436,600 372,642"/><line x1="470" y1="642" x2="566" y2="642"/></g>
+    <rect x="300" y="520" width="424" height="160" rx="72" fill="url(#screenGloss)"/>
+    <rect x="303" y="523" width="418" height="154" rx="69" fill="none" stroke="url(#edgeLight)" stroke-opacity="0.6" stroke-width="4"/>
+  </g>
+</svg>

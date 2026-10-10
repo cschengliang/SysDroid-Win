@@ -224,7 +224,7 @@ def validate_recording_path(filename: str) -> Path:
     try:
         # A disposable sibling checks directory permissions without touching an
         # existing recording. The context manager closes and removes it.
-        with tempfile.NamedTemporaryFile(prefix=".android-toolbox-", dir=path.parent):
+        with tempfile.NamedTemporaryFile(prefix=".sysdroid-", dir=path.parent):
             pass
     except OSError as exc:
         raise ValueError(f"录制目录不可写：{path.parent}\n{exc}") from exc
