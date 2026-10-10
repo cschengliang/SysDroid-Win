@@ -2,25 +2,47 @@ from __future__ import annotations
 
 import bisect
 import json
+import shlex
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QFormLayout, QGroupBox, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
-    QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
+    QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
 
 from sysdroid.core.backend import TaskRunner
 from sysdroid.core.settings import SettingsController, SettingValue
 from sysdroid.core.users import AndroidUserController
 from sysdroid.ui import kit as ui_kit
+from sysdroid.ui.tables import TableTools
 def _note(text: str = "") -> QLabel:
     label = QLabel(text)
     label.setWordWrap(True)
     label.setTextFormat(Qt.TextFormat.PlainText)
     label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     return label
+
+
+# Characters QPlainTextEdit cannot round-trip as plain text: they need JSON escapes.
+_JSON_ONLY = "\r\u2028\u2029"
+
+# Common developer presets: (menu path, namespace, [(name, value), ...]).
+SETTINGS_PRESETS: tuple[tuple[str, str, str, tuple[tuple[str, str], ...]], ...] = tuple(
+    [("动画缩放", f"{label}", "global", tuple((name, scale) for name in (
+        "window_animation_scale", "transition_animation_scale", "animator_duration_scale")))
+     for label, scale in (("关闭动画 (0)", "0"), ("0.5x", "0.5"), ("1x（默认）", "1"), ("2x", "2"))] +
+    [("显示触摸操作", "开启", "system", (("show_touches", "1"),)),
+     ("显示触摸操作", "关闭", "system", (("show_touches", "0"),)),
+     ("指针位置", "开启", "system", (("pointer_location", "1"),)),
+     ("指针位置", "关闭", "system", (("pointer_location", "0"),)),
+     ("充电时保持唤醒", "开启（USB / 交流 / 无线）", "global", (("stay_on_while_plugged_in", "7"),)),
+     ("充电时保持唤醒", "关闭", "global", (("stay_on_while_plugged_in", "0"),))])
+
+
+def _needs_json(value: str) -> bool:
+    return any(character in value for character in _JSON_ONLY)
 
 
 def _quoted(value: str) -> str:
@@ -112,6 +134,19 @@ class SettingsPage(QWidget):
         self.refresh_button = QPushButton("刷新名称和值")
         self.refresh_button.clicked.connect(self._refresh)
         context_row.addWidget(self.refresh_button)
+        self.preset_button = QToolButton()
+        self.preset_button.setObjectName("settingsPresets")
+        self.preset_button.setText("常用预设")
+        self.preset_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        preset_menu = QMenu(self.preset_button)
+        submenus: dict[str, QMenu] = {}
+        for group, label, namespace, changes in SETTINGS_PRESETS:
+            submenu = submenus.get(group) or submenus.setdefault(group, preset_menu.addMenu(group))
+            action = submenu.addAction(label)
+            action.triggered.connect(lambda _checked=False, g=group, l=label, n=namespace, c=changes:
+                                     self.apply_preset(f"{g} · {l}", n, list(c)))
+        self.preset_button.setMenu(preset_menu)
+        context_row.addWidget(self.preset_button)
         layout.addLayout(context_row)
         self.scope_label = ui_kit.set_role(_note(), "hint")
         layout.addWidget(self.scope_label)
@@ -166,6 +201,8 @@ class SettingsPage(QWidget):
         self.table.setMinimumWidth(240)
         self.table.setMinimumHeight(100)
         self.table.itemSelectionChanged.connect(self._selection_changed)
+        self.table_tools = TableTools(self.table, export_name="settings", menu=self._extend_menu,
+                                      refresh=self.refresh_button.click, search=self.search, text=self._cell_text)
         self.splitter.addWidget(self.table)
         ui_kit.install_empty_state(self.table, lambda: ui_kit.device_empty_text(
             self.controller.serial, self.controller.device_state, self.table, self.status_label.text(), "暂无设置项 · 点击「刷新名称和值」读取"),
@@ -194,16 +231,23 @@ class SettingsPage(QWidget):
         self.current_value.setReadOnly(True)
         self.current_value.setMinimumHeight(minimum_editor_height)
         self.current_value.setMaximumHeight(max(100, minimum_editor_height))
-        form.addRow("当前实际值（JSON）", self.current_value)
+        form.addRow("当前实际值", self.current_value)
         self.current_value_note = _note()
         form.addRow(self.current_value_note)
         self.value_field = QPlainTextEdit()
         self.value_field.setObjectName("settingsValue")
-        self.value_field.setPlaceholderText('输入 JSON 字符串，例如 "text"、""；换行使用 \\r / \\n，Unicode 可用 \\u 转义')
         self.value_field.setMinimumHeight(minimum_editor_height)
         self.value_field.setMaximumHeight(max(120, minimum_editor_height))
         self.value_field.textChanged.connect(self._proposal_changed)
-        form.addRow("拟写入值（JSON 字符串）", self.value_field)
+        form.addRow("拟写入值", self.value_field)
+        mode_row = QHBoxLayout()
+        self.json_mode = QCheckBox("JSON 转义模式")
+        self.json_mode.setObjectName("settingsJsonMode")
+        self.json_mode.setToolTip("默认按原文输入；需要 \\r 或 Unicode 行/段分隔符时使用 JSON 字符串精确表示。")
+        self.json_mode.toggled.connect(self._json_mode_toggled)
+        mode_row.addWidget(self.json_mode)
+        mode_row.addStretch()
+        form.addRow(mode_row)
         self.value_note = _note()
         form.addRow(self.value_note)
         editor_layout.addLayout(form)
@@ -235,7 +279,34 @@ class SettingsPage(QWidget):
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setSizes([640, 320])
         layout.addWidget(self.splitter, 1)
+        self._update_mode_hint()
         self._update_proposal_note()
+
+    def _row_name(self, row: int) -> str:
+        item = self.table.item(row, 0)
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else ""
+
+    def _cell_text(self, row: int, column: int) -> str | None:
+        if column != 1:
+            return None
+        observed = self.controller.values.get(self._row_name(row))
+        return observed.value if observed is not None and observed.exists and observed.value is not None else ""
+
+    def _extend_menu(self, menu: QMenu, row: int) -> None:
+        name = self._row_name(row)
+        if not name:
+            return
+        if self._selected_name() != name:
+            self.table.selectRow(row)
+        menu.addAction("读取当前值", self._read).setEnabled(self.read_button.isEnabled())
+        menu.addAction("复制名称", lambda: QApplication.clipboard().setText(name))
+        observed = self.controller.values.get(name)
+        if observed is not None and observed.exists and observed.value is not None:
+            value = observed.value
+            menu.addAction("复制原始值", lambda: QApplication.clipboard().setText(value))
+            menu.addAction("复制为 settings put 命令（设备 shell）", lambda: QApplication.clipboard().setText(shlex.join(
+                ["settings", "put", "--user", str(self.controller.user_id),
+                 self.controller.namespace, name, value])))
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -461,27 +532,56 @@ class SettingsPage(QWidget):
     def _set_proposed_value(self, value: str) -> None:
         if self._proposed_value != value:
             self._context_revision += 1
+        if _needs_json(value) and not self.json_mode.isChecked():
+            # Plain text cannot preserve these characters exactly.
+            with QSignalBlocker(self.json_mode):
+                self.json_mode.setChecked(True)
         self._loading_value = True
         try:
-            self.value_field.setPlainText(json.dumps(value, ensure_ascii=True))
+            self.value_field.setPlainText(json.dumps(value, ensure_ascii=True) if self.json_mode.isChecked() else value)
             self._proposed_value = value
             self._proposal_error = ""
         finally:
             self._loading_value = False
+        self._update_mode_hint()
         self._update_proposal_note()
+
+    def _json_mode_toggled(self, checked: bool) -> None:
+        if not checked and _needs_json(self._proposed_value):
+            with QSignalBlocker(self.json_mode):
+                self.json_mode.setChecked(True)
+            self._set_local_error("拟写入值包含 \\r 或 Unicode 行/段分隔符，只能在 JSON 模式下精确编辑。")
+            self._display_error()
+            return
+        # Re-render the last valid proposal in the new representation.
+        self._local_error = ""
+        self._set_proposed_value(self._proposed_value)
+        self._update_current_value()
+        self._display_error()
+        self._update_enabled()
+
+    def _update_mode_hint(self) -> None:
+        self.value_field.setPlaceholderText(
+            '输入 JSON 字符串，例如 "text"、""；换行使用 \\r / \\n，Unicode 可用 \\u 转义'
+            if self.json_mode.isChecked() else "按原文输入要写入的值；留空表示写入空字符串（不是删除）")
 
     def _proposal_changed(self) -> None:
         if self._loading_value:
             return
         try:
             encoded = self.value_field.document().toRawText()
-            if any(character in encoded for character in "\r\n\u2028\u2029"):
-                raise ValueError("换行及段落分隔符必须使用 JSON 转义")
-            value = json.loads(encoded)
-            if not isinstance(value, str):
-                raise ValueError("拟写入值必须是 JSON 字符串，而不是 null、数字或对象")
-            self._proposed_value = value
-            self._proposal_error = ""
+            if not self.json_mode.isChecked():
+                # Qt stores line breaks as paragraph / line separators.
+                self._proposed_value = encoded.replace("\u2029", "\n").replace("\u2028", "\n")
+                self._proposal_error = ""
+            else:
+                if any(character in encoded for character in "\r\n\u2028\u2029"):
+                    raise ValueError("换行及段落分隔符必须使用 JSON 转义")
+                value = json.loads(encoded)
+                if not isinstance(value, str):
+                    raise ValueError("拟写入值必须是 JSON 字符串，而不是 null、数字或对象")
+                self._proposed_value = value
+                self._proposal_error = ""
         except (ValueError, json.JSONDecodeError) as exc:
             self._proposal_error = f"拟写入 JSON 字符串无效：{exc}"
         self._context_revision += 1
@@ -499,14 +599,16 @@ class SettingsPage(QWidget):
         name = self.name_field.text()
         observed = self.controller.values.get(name)
         value = observed.value if observed is not None and observed.exists else None
-        display = json.dumps(value, ensure_ascii=True) if value is not None else ""
+        plain = value is not None and not self.json_mode.isChecked() and not _needs_json(value)
+        display = value if plain else json.dumps(value, ensure_ascii=True) if value is not None else ""
         if self.current_value.toPlainText() != display:
             self.current_value.setPlainText(display)
         description = _value_description(observed)
         self.current_value.setPlaceholderText(description if not value else "")
         self.current_value.setToolTip(description)
         self.current_value_note.setText(
-            f"当前实际值：{len(value)} 个原始字符（JSON 转义显示）。" if value is not None else description)
+            f"当前实际值：{len(value)} 个原始字符{'' if plain else '（JSON 转义显示）'}。"
+            if value is not None else description)
 
     def _target_ready(self) -> bool:
         return (bool(self.controller.serial) and self.controller.device_state == "device" and
@@ -521,6 +623,7 @@ class SettingsPage(QWidget):
         self.name_field.setEnabled(self._target_ready())
         self.value_field.setEnabled(self._target_ready())
         self.refresh_button.setEnabled(actions_ready)
+        self.preset_button.setEnabled(actions_ready)
         self.new_button.setEnabled(actions_ready)
         self.read_button.setEnabled(actions_ready and bool(self.name_field.text()))
         self.write_button.setEnabled(actions_ready and bool(self.name_field.text()) and not self._proposal_error)
@@ -657,6 +760,41 @@ class SettingsPage(QWidget):
                 self.controller.delete(name)
         except ValueError as exc:
             self._set_local_error(str(exc))
+
+    def apply_preset(self, title: str, namespace: str, changes: list[tuple[str, str]]) -> bool:
+        """Confirm and write a preset in one verified round trip."""
+        if not self._ready() or self._pending_read is not None or self._confirmation_open:
+            self._set_local_error("设备或 Settings 正忙，暂不能应用预设。")
+            self._display_error()
+            return False
+        capture = (self.controller.serial, self.controller.device_state, self.controller.user_id, self._task_revision)
+        lines = "\n".join(f"  {namespace}/{name} = {_quoted(value)}" for name, value in changes)
+        self._confirmation_open = True
+        self._update_enabled()
+        try:
+            answer = QMessageBox.question(
+                self, "应用 Settings 预设",
+                f"预设：{title}\n设备：{self.controller.serial}\nuser：{self.controller.user_id}\n\n{lines}\n\n"
+                + ("global 是设备全局共享设置，修改可影响其他用户。\n" if namespace == "global" else "")
+                + "提交后会立即读回核对。继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        finally:
+            self._confirmation_open = False
+            self._update_enabled()
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        if capture != (self.controller.serial, self.controller.device_state, self.controller.user_id,
+                       self._task_revision) or not self._ready():
+            self._set_local_error("设备、用户或任务状态在确认期间已变化；预设未提交。")
+            self._display_error()
+            return False
+        try:
+            self.controller.write_many(namespace, changes)
+        except ValueError as exc:
+            self._set_local_error(str(exc))
+            self._display_error()
+            return False
+        return True
 
     def open_output(self) -> None:
         if self.controller.last_task_id:

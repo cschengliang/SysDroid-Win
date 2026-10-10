@@ -1,3 +1,4 @@
+import re
 import shlex
 
 import pytest
@@ -12,6 +13,26 @@ BASE_PROPERTIES = {"debug.pygui.existing": "before", "debug.pygui.empty": ""}
 
 def getprop_output(properties):
     return "".join(f"[{name}]: [{value}]\n" for name, value in properties.items())
+
+
+def single_output(task, value, exists=None, *, count=None):
+    """Framed response to a single-property read; ``value`` None means missing."""
+    script = task.args[-1]
+    nonce = re.search(r"FRAME ([0-9a-f]+)", script).group(1)
+    shown = "" if value is None else value
+    if count is None:
+        count = "1" if value is not None else "0"
+    return (f"FRAME {nonce}\nBEGIN {nonce} value\n{shown}\n\nEND {nonce} value 0\n"
+            f"BEGIN {nonce} count\n{count}\n\nEND {nonce} count 0\nDONE {nonce}\n")
+
+
+def respond(task, properties):
+    """Answer either a full ``getprop`` or a single-property script from a device snapshot."""
+    script = task.args[-1]
+    if "FRAME" not in script:
+        return getprop_output(properties)
+    name = shlex.split(script.split("getprop ", 1)[1].split("; rc=", 1)[0])[0]
+    return single_output(task, properties.get(name))
 
 
 class ManualPropRunner(QObject):
@@ -57,7 +78,7 @@ def online_controller(prop_runner):
     controller = PropController(prop_runner)
     controller.set_device("device-a")
     controller.refresh()
-    prop_runner.finish(prop_runner.requests[-1], getprop_output(BASE_PROPERTIES))
+    prop_runner.finish(prop_runner.requests[-1], respond(prop_runner.requests[-1], BASE_PROPERTIES))
     return controller
 
 
@@ -88,20 +109,45 @@ def test_getprop_rejects_malformed_partial_trailing_and_duplicate_records(output
         parse_getprop(output)
 
 
-def test_reads_replace_full_snapshot_and_distinguish_missing_from_empty(prop_runner, online_controller):
+def test_single_reads_update_one_entry_and_distinguish_missing_from_empty(prop_runner, online_controller):
     controller = online_controller
-    missing = controller.read("debug.pygui.missing")
-    prop_runner.finish(missing, "[debug.pygui.empty]: []\n", "[not.stdout]: [ignore]\n")
+    missing = controller.read("debug.pygui.existing")
+    assert "getprop debug.pygui.existing" in missing.args[-1] and missing.args[-1] != "getprop"
+    prop_runner.finish(missing, single_output(missing, None), "[not.stdout]: [ignore]\n")
     assert controller.properties == {"debug.pygui.empty": ""}
     assert "不存在" in controller.status and not controller.error
     assert not controller.busy
 
-    empty = controller.read("debug.pygui.empty")
-    prop_runner.finish(empty, "[debug.pygui.empty]: []\n")
-    assert "debug.pygui.empty" in controller.properties
-    assert controller.properties["debug.pygui.empty"] == ""
+    empty = controller.read("debug.pygui.new")
+    prop_runner.finish(empty, single_output(empty, ""))
+    assert controller.properties == {"debug.pygui.empty": "", "debug.pygui.new": ""}
     assert "已读取" in controller.status and "不存在" not in controller.status
     assert not controller.error
+
+    multi = controller.read("debug.pygui.multi")
+    prop_runner.finish(multi, single_output(multi, "line 1\n\nline 3\n"))
+    assert controller.properties["debug.pygui.multi"] == "line 1\n\nline 3\n"
+
+
+def test_empty_value_with_unusable_existence_probe_is_not_guessed(prop_runner, online_controller):
+    controller = online_controller
+    task = controller.read("debug.pygui.empty")
+    prop_runner.finish(task, single_output(task, "", count="grep: not found"))
+    assert controller.properties == BASE_PROPERTIES
+    assert "无法确认" in controller.error and "失败" in controller.status
+
+
+def test_single_read_rejects_unframed_or_failed_getprop(prop_runner, online_controller):
+    controller = online_controller
+    task = controller.read("debug.pygui.existing")
+    prop_runner.finish(task, single_output(task, "x").replace("value 0", "value 1", 1))
+    assert controller.properties == BASE_PROPERTIES and "失败" in controller.status
+
+
+def test_diff_properties_reports_added_removed_changed():
+    from sysdroid.core.props import diff_properties
+    assert diff_properties({"a": "1", "b": "2", "same": "x"}, {"b": "3", "c": "", "same": "x"}) == [
+        ("removed", "a", "1", None), ("changed", "b", "2", "3"), ("added", "c", None, "")]
 
 
 @pytest.mark.parametrize("name,value", [
@@ -135,7 +181,7 @@ def test_write_is_literal_and_busy_until_exact_same_target_verification(
     assert all(busy and properties == BASE_PROPERTIES for busy, properties in updates)
 
     actual = {**BASE_PROPERTIES, name: value}
-    prop_runner.finish(verify, getprop_output(actual))
+    prop_runner.finish(verify, respond(verify, actual))
     assert controller.properties == actual
     assert not controller.busy and controller.task_id == ""
     assert controller.last_task_id == verify.id
@@ -155,8 +201,12 @@ def test_verification_mismatch_publishes_observed_snapshot_not_requested_value(
     actual = {"other": "observed"}
     if observed is not None:
         actual[name] = observed
-    prop_runner.finish(prop_runner.requests[-1], getprop_output(actual))
-    assert controller.properties == actual
+    prop_runner.finish(prop_runner.requests[-1], respond(prop_runner.requests[-1], actual))
+    expected = dict(BASE_PROPERTIES)
+    expected.pop(name)
+    if observed is not None:
+        expected[name] = observed
+    assert controller.properties == expected  # only the verified entry changes
     assert not controller.busy
     assert "不一致" in controller.status and "成功" not in controller.status
     assert repr(requested) in controller.error
@@ -241,13 +291,13 @@ def test_device_switch_ignores_old_results_and_never_verifies_old_write(
     controller.changed.connect(lambda: updates.append(True))
     status = controller.status
     count = len(prop_runner.requests)
-    prop_runner.finish(old, getprop_output({"old.target": "must not appear"}))
+    prop_runner.finish(old, respond(old, {"old.target": "must not appear"}))
     assert controller.properties == {} and controller.status == status
     assert controller.task_id == controller.last_task_id == current.id
     assert len(prop_runner.requests) == count and not updates
 
     actual = {"new.target": "actual value"}
-    prop_runner.finish(current, getprop_output(actual))
+    prop_runner.finish(current, respond(current, actual))
     prop_runner.finish(old, "", "late failure", 1)
     assert controller.properties == actual and not controller.error
     assert controller.serial == "device-b" and not controller.busy
@@ -271,9 +321,9 @@ def test_state_change_invalidates_verification_and_online_return_loads_fresh_sna
     controller.set_device("device-a")
     controller.refresh()
     current = prop_runner.requests[-1]
-    prop_runner.finish(old_verify, getprop_output({"debug.pygui.existing": "old requested value"}))
+    prop_runner.finish(old_verify, respond(old_verify, {"debug.pygui.existing": "old requested value"}))
     assert controller.properties == {} and controller.task_id == current.id
-    prop_runner.finish(current, getprop_output({"debug.pygui.existing": "fresh"}))
+    prop_runner.finish(current, respond(current, {"debug.pygui.existing": "fresh"}))
     assert controller.properties == {"debug.pygui.existing": "fresh"}
     assert not controller.error
 
@@ -289,7 +339,7 @@ def test_switching_away_and_back_does_not_accept_original_same_serial_write(prop
     prop_runner.finish(old)
     assert len(prop_runner.requests) == count
     assert controller.properties == {} and controller.task_id == current.id
-    prop_runner.finish(current, getprop_output({"actual": "fresh same serial"}))
+    prop_runner.finish(current, respond(current, {"actual": "fresh same serial"}))
     assert controller.properties == {"actual": "fresh same serial"}
 
 
@@ -303,7 +353,7 @@ def test_same_device_notification_does_not_invalidate_pending_write(prop_runner,
     assert controller.task_id == write.id and controller.properties == BASE_PROPERTIES
     assert len(prop_runner.requests) == count and not updates
     prop_runner.finish(write)
-    prop_runner.finish(prop_runner.requests[-1], getprop_output({**BASE_PROPERTIES, "debug.pygui.existing": "after"}))
+    prop_runner.finish(prop_runner.requests[-1], respond(prop_runner.requests[-1], {**BASE_PROPERTIES, "debug.pygui.existing": "after"}))
     assert not controller.error and controller.properties["debug.pygui.existing"] == "after"
 
 
@@ -324,7 +374,7 @@ def test_device_change_during_task_submission_cannot_overwrite_new_pending_reque
     count = len(prop_runner.requests)
     prop_runner.finish(write)
     assert len(prop_runner.requests) == count and controller.task_id == current.id
-    prop_runner.finish(current, getprop_output({"new.device": "actual"}))
+    prop_runner.finish(current, respond(current, {"new.device": "actual"}))
     assert controller.properties == {"new.device": "actual"}
 
 
@@ -382,7 +432,7 @@ def test_device_context_does_not_query_until_requested(prop_runner):
     assert not prop_runner.requests
     assert not controller.busy
     controller.refresh()
-    prop_runner.finish(prop_runner.requests[-1], getprop_output({"value": "actual"}))
+    prop_runner.finish(prop_runner.requests[-1], respond(prop_runner.requests[-1], {"value": "actual"}))
     assert controller.properties == {"value": "actual"}
 
 
@@ -393,7 +443,7 @@ def test_page_lazily_loads_context_and_keeps_hidden_write_readback(prop_runner):
     page.set_device("device-a")
     assert not prop_runner.requests
     page.set_active(True)
-    prop_runner.finish(prop_runner.requests[-1], getprop_output(BASE_PROPERTIES))
+    prop_runner.finish(prop_runner.requests[-1], respond(prop_runner.requests[-1], BASE_PROPERTIES))
     count = len(prop_runner.requests)
     page.set_device("device-a")
     page.set_active(False)
@@ -404,7 +454,7 @@ def test_page_lazily_loads_context_and_keeps_hidden_write_readback(prop_runner):
     page.set_active(False)
     write = page.controller.write("debug.pygui.existing", "written")
     prop_runner.finish(write)
-    prop_runner.finish(prop_runner.requests[-1], getprop_output({**BASE_PROPERTIES, "debug.pygui.existing": "written"}))
+    prop_runner.finish(prop_runner.requests[-1], respond(prop_runner.requests[-1], {**BASE_PROPERTIES, "debug.pygui.existing": "written"}))
     assert page.controller.properties["debug.pygui.existing"] == "written"
     assert page.value_field.toPlainText() == "my proposal"
     page.set_active(True)
@@ -418,7 +468,7 @@ def test_page_lazily_loads_context_and_keeps_hidden_write_readback(prop_runner):
     current = prop_runner.requests[-1]
     page.set_device("device-b")
     assert len(prop_runner.requests) == count + 1
-    prop_runner.finish(current, getprop_output({"new.target": "fresh"}))
+    prop_runner.finish(current, respond(current, {"new.target": "fresh"}))
     assert page.controller.properties == {"new.target": "fresh"}
     assert page.name_field.text() == page.value_field.toPlainText() == ""
 
@@ -429,7 +479,7 @@ def test_filter_and_refresh_preserve_selected_proposal(prop_runner):
     page = PropPage(prop_runner)
     page.set_device("device-a")
     page.set_active(True)
-    prop_runner.finish(prop_runner.requests[-1], getprop_output(BASE_PROPERTIES))
+    prop_runner.finish(prop_runner.requests[-1], respond(prop_runner.requests[-1], BASE_PROPERTIES))
     row = next(row for row in range(page.table.rowCount())
                if page.table.item(row, 0).text() == "debug.pygui.existing")
     page.table.selectRow(row)
@@ -437,7 +487,7 @@ def test_filter_and_refresh_preserve_selected_proposal(prop_runner):
     page.search.setText("existing")
     page._apply_filter()
     page.controller.refresh()
-    prop_runner.finish(prop_runner.requests[-1], getprop_output({**BASE_PROPERTIES, "debug.pygui.existing": "externally changed"}))
+    prop_runner.finish(prop_runner.requests[-1], respond(prop_runner.requests[-1], {**BASE_PROPERTIES, "debug.pygui.existing": "externally changed"}))
     assert page.name_field.text() == "debug.pygui.existing"
     assert page.value_field.toPlainText() == "unsaved proposal"
     assert page._selected_name() == "debug.pygui.existing"
@@ -452,7 +502,7 @@ def test_confirmation_rejects_editor_change_even_when_restored(prop_runner, monk
     page = PropPage(prop_runner)
     page.set_device("device-a")
     page.set_active(True)
-    prop_runner.finish(prop_runner.requests[-1], getprop_output(BASE_PROPERTIES))
+    prop_runner.finish(prop_runner.requests[-1], respond(prop_runner.requests[-1], BASE_PROPERTIES))
     page.name_field.setText("debug.pygui.existing")
     page.value_field.setPlainText("requested")
     count = len(prop_runner.requests)
@@ -470,3 +520,74 @@ def test_confirmation_rejects_editor_change_even_when_restored(prop_runner, monk
     page._write()
     assert len(prop_runner.requests) == count
     assert page.controller.properties == BASE_PROPERTIES
+
+
+@pytest.fixture
+def loaded_page(prop_runner):
+    from sysdroid.ui.pages.prop_page import PropPage
+
+    page = PropPage(prop_runner)
+    page.set_device("device-a")
+    page.set_active(True)
+    prop_runner.finish(prop_runner.requests[-1], respond(prop_runner.requests[-1], BASE_PROPERTIES))
+    yield page
+    page.deleteLater()
+
+
+def test_prop_table_copy_and_export_use_raw_values(loaded_page, tmp_path):
+    import csv
+    from PySide6.QtWidgets import QApplication
+
+    page = loaded_page
+    row = page._rows["debug.pygui.empty"]
+    assert page.table.item(row, 1).text() == "（空值）"
+    page.table.selectRow(row)
+    assert page.table_tools.copy_selection() == "debug.pygui.empty\t\t普通属性"
+    assert QApplication.clipboard().text() == "debug.pygui.empty\t\t普通属性"
+    path = page.table_tools.export_csv(str(tmp_path / "props.csv"))
+    with open(path, encoding="utf-8-sig", newline="") as stream:
+        rows = list(csv.reader(stream))
+    assert rows[0] == ["属性名称", "当前值", "前缀类型"]
+    assert ["debug.pygui.empty", "", "普通属性"] in rows and len(rows) == 3
+
+
+def test_prop_context_menu_offers_page_and_shared_actions(loaded_page):
+    page = loaded_page
+    menu = page.table_tools.build_menu(page._rows["debug.pygui.existing"], 1)
+    texts = [action.text() for action in menu.actions() if action.text()]
+    assert texts[:4] == ["重新读取此属性", "复制名称", "复制原始值", "复制为 setprop 命令（设备 shell）"]
+    assert {"复制单元格", "复制行", "导出 CSV…"} <= set(texts)
+    assert page._selected_name() == "debug.pygui.existing"
+
+
+def test_snapshot_baseline_diff_and_file_round_trip(prop_runner, loaded_page, tmp_path):
+    page = loaded_page
+    assert not page.compare_action.isEnabled()
+    page.record_baseline()
+    assert page.compare_action.isEnabled() and "2 条" in page.baseline_label.text()
+    page.controller.refresh()
+    prop_runner.finish(prop_runner.requests[-1], getprop_output({"debug.pygui.existing": "after", "new": "1"}))
+    assert page.diff_rows() == [("removed", "debug.pygui.empty", "", None),
+                                ("changed", "debug.pygui.existing", "before", "after"),
+                                ("added", "new", None, "1")]
+    dialog = page.show_diff()
+    assert dialog.findChild(type(page.table), "propDiffTable").rowCount() == 3
+    dialog.close()
+    saved = page._save_snapshot_file(str(tmp_path / "snap.json"))
+    assert page.load_baseline(saved) and page.diff_rows() == []
+    dump = tmp_path / "getprop.txt"
+    dump.write_bytes("[debug.pygui.existing]: [after]\r\n".encode())
+    assert page.load_baseline(str(dump))
+    assert page.diff_rows() == [("added", "new", None, "1")]
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"properties": [1]}', encoding="utf-8")
+    assert not page.load_baseline(str(bad)) and "加载基线失败" in page.error_label.text()
+
+
+def test_editor_has_no_popout_window(loaded_page):
+    page = loaded_page
+    assert not hasattr(page, "editor_window")
+    page.editor_toggle_button.setChecked(False)
+    assert page.editor_scroll.isHidden()
+    page.editor_toggle_button.setChecked(True)
+    assert not page.editor_scroll.isHidden()

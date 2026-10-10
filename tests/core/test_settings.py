@@ -46,12 +46,46 @@ def names_output(*names):
     return "".join(f"Row: {index} name={name}\n" for index, name in enumerate(names)) if names else "No result found.\n"
 
 
-def finish_read(runner, name, value, *, after_exists=None):
+def script_lines(script):
+    """Split a generated shell script into commands, keeping quoted newlines inside their command."""
+    commands, pending = [], ""
+    for line in script.split("\n"):
+        pending = f"{pending}\n{line}" if pending else line
+        try:
+            shlex.split(pending)
+        except ValueError:
+            continue
+        commands.append(pending)
+        pending = ""
+    assert not pending
+    return commands
+
+
+def framed_output(task, respond):
+    """Answer a printf-framed settings script; ``respond(kind, index)`` returns each record body."""
+    records = []
+    lines = script_lines(task.args[-1])
+    for offset in range(0, len(lines), 4):
+        _, nonce, index, kind = shlex.split(lines[offset])[1].replace("\\n", "").split(" ")
+        body, code = respond(kind, index)
+        records.append(f"BEGIN {nonce} {index} {kind}\n{body}\nEND {nonce} {index} {kind} {code}\n")
+    return "".join(records)
+
+
+def finish_read(runner, name, value, *, after_exists=None, mutate="", mutate_code=0):
+    """Finish the latest read (or change) script with a single observed value."""
     exists = value is not None
-    runner.finish(runner.requests[-1], names_output(name) if exists else names_output())
-    runner.finish(runner.requests[-1], f"Row: 0 value={value}\n" if exists else names_output())
     exists_after = exists if after_exists is None else after_exists
-    runner.finish(runner.requests[-1], names_output(name) if exists_after else names_output())
+
+    def respond(kind, index):
+        if kind == "mutate":
+            return mutate.removesuffix("\n"), mutate_code
+        if kind == "before":
+            return (names_output(name) if exists else names_output()).removesuffix("\n"), 0
+        if kind == "get":
+            return (f"Row: 0 value={value}" if exists else names_output().removesuffix("\n")), 0
+        return (names_output(name) if exists_after else names_output()).removesuffix("\n"), 0
+    runner.finish(runner.requests[-1], framed_output(runner.requests[-1], respond))
 
 
 class DeviceSettings:
@@ -95,7 +129,7 @@ class DeviceSettings:
 
     def batch_output(self, task):
         records = []
-        lines = task.args[-1].splitlines()
+        lines = script_lines(task.args[-1])
         for offset in range(0, len(lines), 4):
             begin = shlex.split(lines[offset])[1].replace("\\n", "\n")
             response = self._response(shlex.split(lines[offset + 1]))
@@ -221,50 +255,94 @@ def test_business_readback_mismatch_exposes_actual_value_not_requested_success(
         controller.write("key", "wanted")
     else:
         controller.delete("key")
-    settings_runner.finish(settings_runner.requests[-1])
-    assert controller.busy
-    finish_read(settings_runner, "key", observed)
+    assert len(settings_runner.requests) == 1
+    finish_read(settings_runner, "key", observed, mutate="" if operation == "write" else "Deleted 1 rows")
     assert controller.values["key"] == SettingValue(observed is not None, observed)
     assert controller.error and "成功" not in controller.status
 
 
-@pytest.mark.parametrize("stage", ["before", "get", "after"])
-@pytest.mark.parametrize("failure", ["stderr", "nonzero", "diagnostic"])
+@pytest.mark.parametrize("failure", ["stderr", "nonzero", "diagnostic", "record-rc", "truncated"])
 def test_failed_readback_preserves_known_snapshot_and_never_acknowledges_command(
-        settings_runner, controller, stage, failure):
+        settings_runner, controller, failure):
     old = SettingValue(True, "previous")
     controller.values = {"key": old}
-    controller.write("key", "wanted")
-    settings_runner.finish(settings_runner.requests[-1])
-    if stage != "before":
-        settings_runner.finish(settings_runner.requests[-1], names_output("key"))
-    if stage == "after":
-        settings_runner.finish(settings_runner.requests[-1], "Row: 0 value=wanted\n")
-    if failure == "stderr" or (failure == "diagnostic" and stage == "get"):
-        settings_runner.finish(settings_runner.requests[-1], "wanted\n", "SecurityException: denied")
+    task = controller.write("key", "wanted")
+    assert "content insert" in task.args[-1] and "content query" in task.args[-1]
+
+    def respond(kind, index):
+        if kind == "get" and failure == "diagnostic":
+            return "Error: provider permission denied", 0
+        if kind == "after" and failure == "record-rc":
+            return "Row: 0 name=key", 1
+        return {"mutate": "", "get": "Row: 0 value=wanted"}.get(kind, "Row: 0 name=key"), 0
+    output = framed_output(task, respond)
+    if failure == "stderr":
+        settings_runner.finish(task, output, "SecurityException: denied")
     elif failure == "nonzero":
-        settings_runner.finish(settings_runner.requests[-1], "partial stdout", "device offline", 1)
+        settings_runner.finish(task, output, "device offline", 1)
+    elif failure == "truncated":
+        settings_runner.finish(task, output[:len(output) // 2])
     else:
-        settings_runner.finish(settings_runner.requests[-1], "Error: provider permission denied\n")
+        settings_runner.finish(task, output)
     assert controller.values == {"key": old}
     assert controller.error and "成功" not in controller.status
     assert "未确认" in controller.status and not controller.busy
 
 
-@pytest.mark.parametrize("stage", ["command", "before", "get"])
-def test_readback_submission_failure_remains_unconfirmed(settings_runner, controller, stage):
+@pytest.mark.parametrize("operation", ["write", "delete"])
+def test_change_submission_failure_reports_not_executed(settings_runner, controller, operation):
     original = SettingValue(True, "known")
     controller.values = {"key": original}
-    controller.write("key", "wanted")
-    if stage != "command":
-        settings_runner.finish(settings_runner.requests[-1])
-    if stage == "get":
-        settings_runner.finish(settings_runner.requests[-1], names_output("key"))
-    settings_runner.start_error = OSError("readback launch failure")
-    settings_runner.finish(settings_runner.requests[-1],
-                           "" if stage == "command" else names_output("key") if stage == "before" else "Row: 0 value=wanted\n")
+    settings_runner.start_error = OSError("launch failure")
+    with pytest.raises(ValueError):
+        controller.write("key", "wanted") if operation == "write" else controller.delete("key")
     assert controller.values == {"key": original} and not controller.busy
-    assert "未确认" in controller.status and "readback launch failure" in controller.error
+    assert "未确认" not in controller.status and "launch failure" in controller.error
+
+
+@pytest.mark.parametrize("operation", ["read", "write", "delete"])
+def test_single_value_operations_take_one_round_trip(settings_runner, controller, operation):
+    device = DeviceSettings({(10, "secure", "key"): "old"})
+    getattr(controller, operation)(*(("key", "new") if operation == "write" else ("key",)))
+    device.answer(settings_runner)
+    assert len(settings_runner.requests) == 1 and not controller.busy and not controller.error
+
+
+def test_write_many_writes_and_verifies_all_names_in_one_script(settings_runner, controller):
+    device = DeviceSettings({(10, "global", "a"): "1", (10, "secure", "shown"): "x"})
+    controller.names = ("shown",)
+    controller.values = {"shown": SettingValue(True, "x")}
+    controller.write_many("global", [("a", "0.5"), ("b", "0.5"), ("c", "0.5")])
+    device.answer(settings_runner)
+    assert len(settings_runner.requests) == 1 and not controller.busy
+    assert all(device.values[(10, "global", name)] == "0.5" for name in "abc")
+    assert "已写入 3 项" in controller.status and not controller.error
+    # Another namespace's readback never leaks into the browsed snapshot.
+    assert controller.names == ("shown",) and set(controller.values) == {"shown"}
+
+
+def test_write_many_reports_each_mismatch(settings_runner, controller):
+    controller.set_context("global", 10)
+    task = controller.write_many("global", [("a", "1"), ("b", "2")])
+
+    def respond(kind, index):
+        name = "ab"[int(index.removeprefix("m"))]
+        if kind == "mutate":
+            return "", 0
+        if kind == "get":
+            return f"Row: 0 value={'1' if name == 'a' else '9'}", 0
+        return f"Row: 0 name={name}", 0
+    settings_runner.finish(task, framed_output(task, respond))
+    assert controller.values == {"a": SettingValue(True, "1"), "b": SettingValue(True, "9")}
+    assert "不一致" in controller.status and "b：请求 '2'，实际 '9'" in controller.error
+    assert "a：" not in controller.error
+
+
+@pytest.mark.parametrize("changes", [[], [("a", "1")] * 2, [(str(i), "1") for i in range(5)], [("a", "nul\0")]])
+def test_write_many_rejects_invalid_batches(settings_runner, controller, changes):
+    with pytest.raises(ValueError):
+        controller.write_many("global", changes)
+    assert not settings_runner.requests
 
 
 @pytest.mark.parametrize("status,code", [("failed", 7), ("timed_out", None), ("cancelled", None)])
@@ -282,7 +360,7 @@ def test_failed_read_preserves_previous_value_and_real_transport_error(settings_
 def test_exit_zero_mutation_diagnostics_do_not_start_verification(settings_runner, controller, output):
     controller.write("key", "wanted")
     count = len(settings_runner.requests)
-    settings_runner.finish(settings_runner.requests[-1], output)
+    finish_read(settings_runner, "key", None, mutate=output)
     assert len(settings_runner.requests) == count
     assert "key" not in controller.values and controller.error and "成功" not in controller.status
 
@@ -503,8 +581,7 @@ def test_changed_context_drops_late_reads_and_writes(settings_runner, controller
 
 def test_task_added_context_reentrancy_cannot_overwrite_new_request(settings_runner, controller):
     def switch(task):
-        command = tokens(task)
-        if command[:2] == ["content", "insert"]:
+        if "content insert" in task.args[-1]:
             controller.set_context("global", 0)
             controller.refresh()
     settings_runner.task_added.connect(switch)
@@ -550,8 +627,8 @@ def test_invalid_value_and_unavailable_user_do_not_submit(settings_runner, contr
 
 
 def mutation_count(runner):
-    return sum(command[0] == "content" and command[1] in {"insert", "delete"}
-               for command in map(tokens, runner.requests))
+    return sum(task.args[-1].count("content insert") + task.args[-1].count("content delete")
+               for task in runner.requests)
 
 
 def test_page_lazy_discovery_and_repeated_activation_preserve_user_selection(settings_runner):
@@ -603,6 +680,7 @@ def test_reading_loads_raw_proposal_but_refresh_and_filter_do_not_change_it(sett
     page.table.selectRow(page._row_by_name["existing"])
     finish_read(settings_runner, "existing", raw)
     assert page._proposed_value == raw
+    assert page.json_mode.isChecked()  # \r cannot round-trip through plain text
     assert json.loads(page.value_field.toolTip().split("\n", 1)[1]) == raw
     items = [page.table.item(row, column) for row in range(2) for column in range(2)]
     page.value_field.setPlainText(json.dumps("new proposal"))
@@ -622,10 +700,10 @@ def test_reading_loads_raw_proposal_but_refresh_and_filter_do_not_change_it(sett
 def test_read_result_cannot_overwrite_edits_made_while_in_flight(settings_runner, settings_page, edit):
     page = settings_page
     page.name_field.setText("existing")
-    page.value_field.setPlainText(json.dumps("keep me"))
+    page.value_field.setPlainText("keep me")
     page._read()
     if edit == "proposal":
-        page.value_field.setPlainText(json.dumps("edited during read"))
+        page.value_field.setPlainText("edited during read")
     elif edit == "name":
         page.name_field.setText("other")
     else:
@@ -639,7 +717,7 @@ def test_read_result_cannot_overwrite_edits_made_while_in_flight(settings_runner
 def test_change_pre_read_updates_current_value_without_replacing_proposal(settings_runner, settings_page, monkeypatch):
     page = settings_page
     page.name_field.setText("existing")
-    page.value_field.setPlainText(json.dumps("wanted"))
+    page.value_field.setPlainText("wanted")
     observed = []
     def reject(dialog):
         observed.append((page.controller.values["existing"].value, page._proposed_value))
@@ -656,7 +734,7 @@ def test_confirmation_switchback_or_intervening_task_never_submits_stale_change(
         settings_runner, settings_page, monkeypatch, change):
     page = settings_page
     page.name_field.setText("existing")
-    page.value_field.setPlainText(json.dumps("wanted"))
+    page.value_field.setPlainText("wanted")
     def change_then_accept(dialog):
         if change == "namespace":
             page.namespace_combo.setCurrentText("global")
@@ -671,7 +749,7 @@ def test_confirmation_switchback_or_intervening_task_never_submits_stale_change(
         elif change == "name":
             page.name_field.setText("other")
         elif change == "proposal":
-            page.value_field.setPlainText(json.dumps("different"))
+            page.value_field.setPlainText("different")
         elif change == "page":
             page.set_active(False)
             page.set_active(True)
@@ -717,9 +795,9 @@ def test_pre_read_edit_and_pre_read_failure_never_open_confirmation(settings_run
     opened = []
     monkeypatch.setattr(QMessageBox, "exec", lambda dialog: opened.append(True) or QMessageBox.StandardButton.Yes)
     page.name_field.setText("existing")
-    page.value_field.setPlainText(json.dumps("wanted"))
+    page.value_field.setPlainText("wanted")
     page._write()
-    page.value_field.setPlainText(json.dumps("changed during pre-read"))
+    page.value_field.setPlainText("changed during pre-read")
     finish_read(settings_runner, "existing", "latest")
     assert not opened and mutation_count(settings_runner) == 0
     page._delete()
@@ -739,6 +817,7 @@ def test_provider_null_is_never_acknowledged_as_preserved_literal_text(settings_
 @pytest.mark.parametrize("raw", ["a\r\nb", "a\u00a0b", "a\u2028b\u2029c"])
 def test_editing_proposal_preserves_untouched_literal_characters(settings_page, raw):
     page = settings_page
+    page.json_mode.setChecked(True)
     page._set_proposed_value(raw)
     cursor = page.value_field.textCursor()
     cursor.setPosition(len(page.value_field.toPlainText()) - 1)
@@ -750,6 +829,7 @@ def test_editing_proposal_preserves_untouched_literal_characters(settings_page, 
 def test_invalid_json_cannot_submit_previous_valid_proposal(settings_runner, settings_page):
     page = settings_page
     page.name_field.setText("existing")
+    page.json_mode.setChecked(True)
     page._set_proposed_value("valid")
     count = len(settings_runner.requests)
     page.value_field.setPlainText('"unterminated')
@@ -770,3 +850,87 @@ def test_loader_noise_on_stderr_does_not_fail_a_verified_refresh(settings_runner
         settings_runner.finish(task, output, noise)
     assert controller.values == {"key": SettingValue(True, "value")}
     assert not controller.error and not controller.busy
+
+
+def test_plain_text_mode_is_default_and_round_trips_multiline_text(settings_page):
+    page = settings_page
+    assert not page.json_mode.isChecked()
+    page.value_field.setPlainText('  "quoted" 中文\nsecond line\u00a0 ')
+    assert page._proposed_value == '  "quoted" 中文\nsecond line\u00a0 '
+    assert not page._proposal_error
+    page.value_field.setPlainText("")
+    assert page._proposed_value == "" and "空字符串" in page.value_note.text()
+
+
+def test_json_mode_toggle_rerenders_and_refuses_lossy_plain_mode(settings_page):
+    page = settings_page
+    page.value_field.setPlainText("a\nb")
+    page.json_mode.setChecked(True)
+    assert page.value_field.toPlainText() == json.dumps("a\nb") and page._proposed_value == "a\nb"
+    page.json_mode.setChecked(False)
+    assert page.value_field.toPlainText() == "a\nb"
+    page._set_proposed_value("x\ry")
+    assert page.json_mode.isChecked()
+    page.json_mode.setChecked(False)
+    assert page.json_mode.isChecked() and "JSON" in page.error_label.text()
+    assert page._proposed_value == "x\ry"
+
+
+def test_invalid_json_switching_back_to_plain_restores_last_valid_proposal(settings_page):
+    page = settings_page
+    page.json_mode.setChecked(True)
+    page._set_proposed_value("valid")
+    page.value_field.setPlainText('"broken')
+    assert page._proposal_error
+    page.json_mode.setChecked(False)
+    assert not page._proposal_error and page.value_field.toPlainText() == "valid"
+
+
+@pytest.mark.parametrize("accept", [True, False])
+def test_preset_confirms_and_writes_all_names_in_one_round_trip(settings_runner, settings_page, monkeypatch, accept):
+    from sysdroid.ui.pages.settings_page import SETTINGS_PRESETS
+    page = settings_page
+    prompts = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: prompts.append(args[2]) or (
+        QMessageBox.StandardButton.Yes if accept else QMessageBox.StandardButton.No))
+    group, label, namespace, changes = next(p for p in SETTINGS_PRESETS if p[1] == "0.5x")
+    count = len(settings_runner.requests)
+    assert page.apply_preset(f"{group} · {label}", namespace, list(changes)) is accept
+    assert "window_animation_scale" in prompts[0] and "global" in prompts[0]
+    if not accept:
+        assert len(settings_runner.requests) == count
+        return
+    device = DeviceSettings()
+    device.answer(settings_runner)
+    assert len(settings_runner.requests) == count + 1 and mutation_count(settings_runner) == 3
+    assert all(device.values[(0, "global", name)] == "0.5" for name, _ in changes)
+    assert "已写入 3 项" in page.controller.status
+
+
+def test_presets_cover_common_developer_toggles():
+    from sysdroid.ui.pages.settings_page import SETTINGS_PRESETS
+    names = {name for *_rest, changes in SETTINGS_PRESETS for name, _value in changes}
+    assert {"window_animation_scale", "transition_animation_scale", "animator_duration_scale",
+            "show_touches", "stay_on_while_plugged_in"} <= names
+    assert all(len(changes) <= 4 for *_rest, changes in SETTINGS_PRESETS)
+
+
+def test_preset_refused_while_busy(settings_runner, settings_page, monkeypatch):
+    page = settings_page
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: pytest.fail("should not ask"))
+    page._refresh()
+    assert not page.apply_preset("x", "global", [("a", "1")])
+    assert page.error_label.text()
+
+
+def test_settings_table_menu_and_export_use_raw_values(settings_page, tmp_path):
+    import csv
+    page = settings_page
+    row = page._row_by_name["existing"]
+    menu = page.table_tools.build_menu(row, 1)
+    texts = [action.text() for action in menu.actions() if action.text()]
+    assert texts[:4] == ["读取当前值", "复制名称", "复制原始值", "复制为 settings put 命令（设备 shell）"]
+    assert page.table_tools.cell_text(row, 1) == "initial existing"
+    path = page.table_tools.export_csv(str(tmp_path / "s.csv"))
+    with open(path, encoding="utf-8-sig", newline="") as stream:
+        assert ["existing", "initial existing"] in list(csv.reader(stream))

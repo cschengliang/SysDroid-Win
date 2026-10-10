@@ -13,6 +13,7 @@ from sysdroid.core.apks import PackageController, PackageDetails
 from sysdroid.core.backend import TaskRunner
 from sysdroid.core.users import AndroidUserController
 from sysdroid.ui import kit as ui_kit
+from sysdroid.ui.tables import TableTools
 class NumericItem(QTableWidgetItem):
     def __lt__(self, other):
         left, right = self.data(Qt.ItemDataRole.UserRole), other.data(Qt.ItemDataRole.UserRole)
@@ -161,11 +162,11 @@ class ApkPage(QWidget):
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setToolTip("双击包名查看详情；右键可启动、停止、启用 / 禁用、卸载、复制包名。")
-        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.table.customContextMenuRequested.connect(self._context_menu)
         self.table.setSortingEnabled(True)
         for column, width in enumerate((225, 90, 100, 90, 75, 150, 240)):
             self.table.setColumnWidth(column, width)
+        self.table_tools = TableTools(self.table, export_name="packages", menu=self._extend_menu,
+                                      refresh=self.refresh_button.click, search=self.search)
         self.splitter.addWidget(self.table)
         ui_kit.install_empty_state(self.table, lambda: ui_kit.device_empty_text(
             self.controller.serial, self.controller.device_state, self.table, self.status.text(), "暂无应用包 · 选择用户后点击「刷新」"),
@@ -483,11 +484,7 @@ class ApkPage(QWidget):
         self.raw.setPlainText(detail.raw)
 
     # -- context menu ------------------------------------------------------
-    def _context_menu(self, position) -> None:
-        item = self.table.itemAt(position)
-        if item is None:
-            return
-        self.table.selectRow(item.row())
+    def _extend_menu(self, menu: QMenu, row: int) -> None:
         package = self._selected()
         summary = self.controller.packages.get(package)
         if summary is None:
@@ -495,7 +492,6 @@ class ApkPage(QWidget):
         online = bool(self.controller.serial and self.controller.device_state == "device")
         idle = online and not self.controller.busy and not self.users.busy and not self._confirming \
             and self.controller.user_id is not None
-        menu = QMenu(self.table)
         menu.addAction("查看详情", self._details).setEnabled(idle)
         menu.addAction("复制包名", lambda: QApplication.clipboard().setText(package))
         menu.addSeparator()
@@ -508,7 +504,6 @@ class ApkPage(QWidget):
         menu.addAction("卸载…", self._uninstall).setEnabled(idle)
         menu.addSeparator()
         menu.addAction("导出 APK…", self._export).setEnabled(self.export_button.isEnabled())
-        menu.exec(self.table.viewport().mapToGlobal(position))
 
     def _launch(self) -> None:
         package = self._selected()

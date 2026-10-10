@@ -160,3 +160,34 @@ def test_device_selector_label_shows_model_then_serial_and_state():
     assert device_label(Device("abc123", "device", "Pixel 8")) == "Pixel 8 (abc123) · device"
     assert device_label(Device("abc123", "unauthorized")) == "abc123 · unauthorized"
     assert device_label(Device("abc123", "disconnected", "Pixel 8")) == "Pixel 8 (abc123) · 已断开"
+
+
+def test_device_table_has_shared_menu_and_f5_refreshes_devices(window, qtbot):
+    answer_devices(window, qtbot, ("usb-a", "device"), ("10.0.0.2:5555", "device"))
+    window._select_page("home")
+    menu = window.device_tools.build_menu(1, 0)
+    texts = [action.text() for action in menu.actions() if action.text()]
+    assert texts[:3] == ["复制 Serial", "设为当前设备", "断开无线设备"]
+    assert {"复制行", "导出 CSV…"} <= set(texts)
+    assert window.device_tools.copy_rows([0]).startswith("usb-a\tdevice")
+    before = len(pending(window, lambda task: task.args[:1] == ["devices"]))
+    assert window.page_shortcut("refresh")
+    assert len(pending(window, lambda task: task.args[:1] == ["devices"])) == before + 1
+    assert not window.page_shortcut("search")  # the device list has no search field
+
+
+def test_shortcuts_dispatch_to_current_page_and_focused_task_panel(window, qtbot, monkeypatch):
+    calls = []
+    window._select_page("apks")
+    monkeypatch.setattr(window.apk_page.table_tools, "focus_search", lambda: calls.append("apk search") or True)
+    assert window.page_shortcut("search") and calls == ["apk search"]
+    window._select_page("commands")
+    window.command_page.tabs.setCurrentIndex(3)
+    assert window.command_page.table_tools is window.command_page.history_tools
+    window.command_page.tabs.setCurrentIndex(1)
+    assert window.command_page.table_tools is None and not window.page_shortcut("refresh")
+    window._select_page("output")
+    monkeypatch.setattr(window.task_panel, "focus_search", lambda: calls.append("task search") or True)
+    assert window.page_shortcut("search") and calls[-1] == "task search"
+    shortcuts = {action.shortcut().toString() for action in window.actions()}
+    assert {"F5", "Ctrl+F", "Ctrl+K"} <= shortcuts

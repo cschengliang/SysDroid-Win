@@ -19,6 +19,7 @@ from sysdroid.core.backend import DATA_DIR, STATUS_LABELS, Device, Task, TaskRun
 from sysdroid.core.devices import DeviceTracker
 from sysdroid.core.users import AndroidUserController
 from sysdroid.ui import kit as ui_kit
+from sysdroid.ui.tables import TableTools
 from sysdroid.ui import theme
 from sysdroid.ui.pages.apk_page import ApkPage
 from sysdroid.ui.pages.command_page import CommandLibraryPage
@@ -388,6 +389,15 @@ class AndroidToolboxWindow(QMainWindow):
         quick.setShortcut(QKeySequence("Ctrl+K"))
         quick.triggered.connect(self._quick_command)
         self.addAction(quick)
+        # F5 / Ctrl+F go to the table of whatever has focus (task panel) or the current page.
+        for name, sequence, slot in (("刷新当前列表", QKeySequence("F5"), lambda: self.page_shortcut("refresh")),
+                                     ("搜索当前列表", QKeySequence(QKeySequence.StandardKey.Find),
+                                      lambda: self.page_shortcut("search"))):
+            action = QAction(name, self)
+            action.setShortcut(sequence)
+            action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+            action.triggered.connect(slot)
+            self.addAction(action)
 
     def _build_adb_home_page(self) -> QWidget:
         scroll = QScrollArea()
@@ -500,8 +510,8 @@ class AndroidToolboxWindow(QMainWindow):
         self.device_table.horizontalHeader().setDefaultSectionSize(140)
         self.device_table.setMinimumHeight(150)
         self.device_table.cellDoubleClicked.connect(lambda row, column: self._select_highlighted())
-        self.device_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.device_table.customContextMenuRequested.connect(self._device_context_menu)
+        self.device_tools = TableTools(self.device_table, export_name="devices", menu=self._device_menu,
+                                       refresh=self._refresh_devices)
         ui_kit.install_empty_state(self.device_table, lambda: self._runtime_error or "未发现设备\n连接 USB 设备或输入无线 ADB 地址后点击「刷新」")
         box_layout.addWidget(self.device_table)
         layout.addWidget(box, 1)
@@ -509,6 +519,7 @@ class AndroidToolboxWindow(QMainWindow):
             "仅 state=device 的设备可执行命令；USB 设备需拔线断开。",
             "仅 state=device 可执行设备命令。USB 断开需拔线；无线连接使用 adb connect / disconnect。"))
         scroll.setWidget(page)
+        scroll.table_tools = self.device_tools
         return scroll
 
     def _build_log_panel(self) -> QWidget:
@@ -558,6 +569,23 @@ class AndroidToolboxWindow(QMainWindow):
     def _set_theme(self, mode: str) -> None:
         self.theme.set_mode(mode)
         self._write_log(f"[VIEW] 主题：{theme.MODE_LABELS[mode]}")
+
+    def _shortcut_target(self):
+        focus = QApplication.focusWidget()
+        if self._active_page_key == "output" or (focus is not None and self.task_panel.isAncestorOf(focus)):
+            return self.task_panel
+        return self.pages.currentWidget()
+
+    def page_shortcut(self, action: str) -> bool:
+        """Dispatch F5 (refresh) / Ctrl+F (search) to the focused panel or current page."""
+        target = self._shortcut_target()
+        handler = getattr(target, "focus_search" if action == "search" else "refresh_shortcut", None)
+        if callable(handler):
+            return bool(handler())
+        tools = getattr(target, "table_tools", None)
+        if tools is None:
+            return False
+        return tools.focus_search() if action == "search" else tools.refresh()
 
     def _select_page(self, key: str) -> None:
         self.navigation.setCurrentItem(self._nav_items[key])
@@ -790,18 +818,14 @@ class AndroidToolboxWindow(QMainWindow):
             QApplication.clipboard().setText(serial)
             self._write_log("[OK] 已复制 Serial：" + serial)
 
-    def _device_context_menu(self, position) -> None:
-        row = self.device_table.rowAt(position.y())
-        if row < 0:
-            return
-        self.device_table.selectRow(row)
-        menu = QMenu(self)
+    def _device_menu(self, menu: QMenu, row: int) -> None:
+        if self.device_table.currentRow() != row:
+            self.device_table.selectRow(row)
         menu.addAction("复制 Serial", self._copy_serial)
         menu.addAction("设为当前设备", self._select_highlighted)
         serial = self._highlighted_serial()
         action = menu.addAction("断开无线设备", lambda: self._disconnect_device(serial))
         action.setEnabled(":" in serial)
-        menu.exec(self.device_table.viewport().mapToGlobal(position))
 
     def _require_device(self, quiet: bool = False) -> bool:
         device = self._devices.get(self._device_serial)

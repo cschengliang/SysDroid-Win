@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from sysdroid.core.backend import OUTPUT_LIMIT, TaskRunner
 from sysdroid.core.processes import SAMPLE_INTERVALS, ProcessController, ProcessInfo, app_package
 from sysdroid.ui import kit as ui_kit
+from sysdroid.ui.tables import TableTools
 _ID_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 
 
@@ -215,8 +216,8 @@ class ProcessPage(QWidget):
         header.sortIndicatorChanged.connect(lambda *_: QTimer.singleShot(0, self._apply_filter))
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.table.itemDoubleClicked.connect(lambda _item: self._load_details())
-        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.table.customContextMenuRequested.connect(self._context_menu)
+        self.table_tools = TableTools(self.table, export_name="processes", menu=self._extend_menu,
+                                      refresh=self.refresh_button.click, search=self.search)
         self.splitter.addWidget(self.table)
         ui_kit.install_empty_state(self.table, lambda: ui_kit.device_empty_text(
             self.controller.serial, self.controller.device_state, self.table, self.status_label.text(), "等待首次采样"),
@@ -522,16 +523,13 @@ class ProcessPage(QWidget):
             self._local_error = str(exc)
             self._render()
 
-    def _context_menu(self, position) -> None:
-        item = self.table.itemAt(position)
-        if item is None:
-            return
-        self.table.setCurrentCell(item.row(), 0)
+    def _extend_menu(self, menu: QMenu, row: int) -> None:
+        if self.table.currentRow() != row:
+            self.table.setCurrentCell(row, 0)
         identity = self._selected_identity()
         info = self._rendered.get(identity)
         if info is None:
             return
-        menu = QMenu(self.table)
         reliable = info.start_ticks is not None
         online = bool(self.controller.serial) and self.controller.device_state == "device"
         details = menu.addAction("读取详情", self._load_details)
@@ -553,7 +551,6 @@ class ProcessPage(QWidget):
                 action.setToolTip("没有可靠启动 ticks，不能确认进程身份")
         if package:
             menu.addAction(f"强行停止应用 {package}…", self.force_stop_selected).setEnabled(online)
-        menu.exec(self.table.viewport().mapToGlobal(position))
 
     def _copy(self, text: str) -> None:
         QApplication.clipboard().setText(text)

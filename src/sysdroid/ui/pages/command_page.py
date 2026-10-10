@@ -5,7 +5,7 @@ from dataclasses import replace
 
 from PySide6.QtCore import QSignalBlocker, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QTabWidget, QTableWidget,
@@ -18,6 +18,7 @@ from sysdroid.core.commands import (
     is_remote_shell, prepare_command, variable_names,
 )
 from sysdroid.ui import kit as ui_kit
+from sysdroid.ui.tables import TableTools
 def command_preview(prepared: PreparedCommand, program: str = "adb") -> str:
     return powershell_command(program, (["-s", prepared.serial] if prepared.serial else []) + list(prepared.args))
 
@@ -33,6 +34,16 @@ def _table(headers: list[str], name: str) -> QTableWidget:
     table.verticalHeader().hide()
     table.horizontalHeader().setStretchLastSection(True)
     return table
+
+
+def _check_text(table: QTableWidget):
+    """Copy / export column 0 checkboxes as 是 / 否 instead of an empty cell."""
+    def text(row: int, column: int) -> str | None:
+        item = table.item(row, column) if column == 0 else None
+        if item is None:
+            return None
+        return "是" if item.checkState() == Qt.CheckState.Checked else "否"
+    return text
 
 
 def _button(text: str, callback, layout) -> QPushButton:
@@ -281,6 +292,9 @@ class CommandLibraryPage(QWidget):
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.table.itemChanged.connect(self._library_item_changed)
         self.table.cellDoubleClicked.connect(lambda row, col: self.open_execution(self.table.item(row, 1).data(Qt.ItemDataRole.UserRole)) if col else None)
+        self.library_tools = TableTools(self.table, export_name="commands", menu=self._library_menu,
+                                        refresh=self._refresh_library, search=self.search,
+                                        text=_check_text(self.table))
         layout.addWidget(self.table, 1)
         ui_kit.install_empty_state(self.table, lambda: "没有可显示的命令\n调整搜索、分类或「仅收藏」筛选，或点击「新建命令」")
         bottom = QHBoxLayout()
@@ -400,6 +414,10 @@ class CommandLibraryPage(QWidget):
         self.management_table.itemSelectionChanged.connect(self._management_selection_changed)
         self.management_table.itemChanged.connect(self._management_item_changed)
         self.management_table.cellDoubleClicked.connect(self._edit_managed_row)
+        self.management_tools = TableTools(self.management_table, export_name="commands-all",
+                                           menu=self._management_menu, refresh=self._refresh_management,
+                                           search=self.management_search,
+                                           text=_check_text(self.management_table))
         layout.addWidget(self.management_table, 1)
         ui_kit.install_empty_state(self.management_table, lambda: "没有匹配的命令\n调整搜索词，或点击「新建命令」")
         actions = QHBoxLayout()
@@ -429,9 +447,45 @@ class CommandLibraryPage(QWidget):
         self.history_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.history_table.cellDoubleClicked.connect(lambda row, col: self._show_history_output())
         self.history_table.itemSelectionChanged.connect(self._history_selection_changed)
+        self.history_tools = TableTools(self.history_table, export_name="history", menu=self._history_menu,
+                                        refresh=self._refresh_history)
         layout.addWidget(self.history_table, 1)
         ui_kit.install_empty_state(self.history_table, lambda: "暂无执行历史\n在命令库执行命令后会显示在这里")
         self.tabs.addTab(page, "执行历史")
+
+    @property
+    def table_tools(self) -> TableTools | None:
+        """The table that answers F5 / Ctrl+F for the visible tab."""
+        return {0: self.library_tools, 2: self.management_tools, 3: self.history_tools}.get(self.tabs.currentIndex())
+
+    def _library_menu(self, menu, row: int) -> None:
+        if self.table.currentRow() != row:
+            self.table.selectRow(row)
+        command_id = self._selected_id()
+        if command_id is None:
+            return
+        menu.addAction("执行…", lambda: self.open_execution(command_id))
+        menu.addAction("编辑", lambda: self.edit_command(command_id))
+
+    def _management_menu(self, menu, row: int) -> None:
+        if self.management_table.currentRow() != row:
+            self.management_table.selectRow(row)
+        command_id = self._managed_id()
+        if command_id is None:
+            return
+        menu.addAction("编辑", lambda: self.edit_command(command_id))
+        menu.addAction("复制为新命令", lambda: self._duplicate(command_id))
+
+    def _history_menu(self, menu, row: int) -> None:
+        if self.history_table.currentRow() != row:
+            self.history_table.selectRow(row)
+        if self._history_id() is None:
+            return
+        menu.addAction("查看输出", self._show_history_output)
+        item = self.history_table.item(row, 1)
+        command = item.toolTip() if item is not None else ""
+        if command:
+            menu.addAction("复制命令", lambda: QApplication.clipboard().setText(command))
 
     def set_runtime_error(self, message: str) -> None:
         self.runtime_error = message

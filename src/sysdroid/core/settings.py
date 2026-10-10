@@ -83,13 +83,13 @@ class _Request:
     user_id: int
     name: str = ""
     proposed: str = ""
-    existed_before: bool | None = None
-    observed: str | None = None
     names: tuple[str, ...] = ()
     pending_names: tuple[str, ...] = ()
     offset: int = 0
     nonce: str = ""
     verified_values: tuple[tuple[str, SettingValue], ...] = ()
+    # (name, value) pairs for a batched write; value None means delete.
+    changes: tuple[tuple[str, str | None], ...] = ()
 
 
 def _parse_value_batch(output: str, request: _Request) -> dict[str, SettingValue]:
@@ -124,6 +124,29 @@ def _parse_value_batch(output: str, request: _Request) -> dict[str, SettingValue
     if cursor != len(output):
         raise ValueError("自动读取包含额外记录或诊断")
     return values
+
+
+def _parse_mutations(output: str, request: _Request) -> tuple[list[tuple[str, int]], str]:
+    """Split the leading mutation records of a change script; returns (responses, rest)."""
+    cursor = 0
+    responses: list[tuple[str, int]] = []
+    for index, _change in enumerate(request.changes):
+        begin = f"BEGIN {request.nonce} m{index} mutate\n"
+        if not output.startswith(begin, cursor):
+            raise ValueError("变更记录缺少起始标记")
+        cursor += len(begin)
+        end = f"\nEND {request.nonce} m{index} mutate "
+        boundary = output.find(end, cursor)
+        if boundary < 0:
+            raise ValueError("变更记录不完整")
+        status_start = boundary + len(end)
+        status_end = output.find("\n", status_start)
+        status = output[status_start:status_end] if status_end >= 0 else ""
+        if not status.isdecimal():
+            raise ValueError("变更记录缺少返回码")
+        responses.append((output[cursor:boundary], int(status)))
+        cursor = status_end + 1
+    return responses, output[cursor:]
 
 
 def _parse_bulk_values(output: str, names: tuple[str, ...]) -> tuple[dict[str, SettingValue], tuple[str, ...]]:
@@ -229,10 +252,13 @@ class SettingsController(QObject):
             raise ValueError("Settings 操作正在进行，请等待完成")
 
     def _begin(self, operation: str, name: str = "", value: str = "") -> Task | None:
-        request = _Request(operation, "list" if operation == "refresh" else
-                           "mutate" if operation in {"write", "delete"} else "before",
-                           self._generation, self.serial, self.namespace, self.user_id,
-                           name, value)
+        # A read is one script (before / get / after); a write or delete is one
+        # script that mutates and then performs the same verified read.
+        stage = "list" if operation == "refresh" else "change" if operation in {"write", "delete"} else "read"
+        changes = ((name, value if operation == "write" else None),) if stage == "change" else ()
+        request = _Request(operation, stage, self._generation, self.serial, self.namespace, self.user_id,
+                           name, value, pending_names=(name,) if name else (), nonce=secrets.token_hex(16),
+                           changes=changes)
         return self._start(request)
 
     def refresh(self) -> Task | None:
@@ -256,6 +282,26 @@ class SettingsController(QObject):
         _validate_name(name)
         return self._begin("delete", name)
 
+    def write_many(self, namespace: str, changes: list[tuple[str, str]]) -> Task | None:
+        """Write up to four settings and read every one back in a single round trip.
+
+        ``namespace`` may differ from the browsed one (presets); the readback is
+        only merged into the visible snapshot when it matches.
+        """
+        self._require_ready()
+        if namespace not in _NAMESPACES:
+            raise ValueError("Settings namespace 必须是 system、secure 或 global")
+        if not changes or len(changes) > _VALUE_BATCH_SIZE or len({name for name, _ in changes}) != len(changes):
+            raise ValueError(f"批量写入需要 1–{_VALUE_BATCH_SIZE} 个不重复名称")
+        for name, value in changes:
+            _validate_name(name)
+            if not isinstance(value, str) or "\0" in value:
+                raise ValueError("Settings 值必须是文本且不能包含 NUL")
+        request = _Request("write-many", "change", self._generation, self.serial, namespace, self.user_id,
+                           changes=tuple(changes), pending_names=tuple(name for name, _ in changes),
+                           nonce=secrets.token_hex(16))
+        return self._start(request)
+
     def _tokens(self, request: _Request) -> list[str]:
         uri = f"content://settings/{request.namespace}"
         if request.stage not in {"list", "bulk", "list-after"}:
@@ -264,11 +310,20 @@ class SettingsController(QObject):
         if request.stage in {"list", "bulk", "list-after", "before", "get", "after"}:
             projection = "name:value" if request.stage == "bulk" else "value" if request.stage == "get" else "name"
             return [*prefix, "--projection", projection]
-        if request.operation == "write":
+        if request.proposed is not None and request.stage == "insert":
             return ["content", "insert", "--user", str(request.user_id),
                     "--uri", f"content://settings/{request.namespace}",
                     "--bind", "name:s:" + request.name, "--bind", "value:s:" + request.proposed]
         return ["content", "delete", "--user", str(request.user_id), "--uri", uri]
+
+    def _change_script(self, request: _Request) -> str:
+        lines: list[str] = []
+        for index, (name, value) in enumerate(request.changes):
+            mutation = replace(request, stage="insert" if value is not None else "delete", name=name, proposed=value)
+            lines.extend((f"printf 'BEGIN {request.nonce} m{index} mutate\\n'",
+                          shlex.join(self._tokens(mutation)), "rc=$?",
+                          f"printf '\\nEND {request.nonce} m{index} mutate %s\\n' \"$rc\""))
+        return "\n".join(lines + [self._batch_script(replace(request, offset=0))])
 
     def _batch_script(self, request: _Request) -> str:
         lines: list[str] = []
@@ -287,21 +342,24 @@ class SettingsController(QObject):
         self.error = ""
         self.status = (f"正在精确读取含换行或记录歧义的 Settings 值… {request.offset} / {len(request.pending_names)}"
                        if request.stage == "batch" else
+                       f"正在批量写入 {len(request.changes)} 项并核对…" if request.operation == "write-many" else
                        "正在自动读取 Settings 当前值…" if request.stage == "bulk" else
                        "正在核对 Settings 名称快照…" if request.stage == "list-after" else
                        "正在加载 Settings 名称…" if request.stage == "list" else
-                       f"正在{'变更' if request.stage == 'mutate' else '读取并核对'} {request.name}…")
+                       f"正在{'变更并核对' if request.stage == 'change' else '读取并核对'} {request.name}…")
         try:
             batch = request.stage == "batch"
             label = (f"精确值 {request.offset + 1}–{min(len(request.pending_names), request.offset + _VALUE_BATCH_SIZE)}"
-                     if batch else request.name or "名称列表")
-            script = self._batch_script(request) if batch else shlex.join(self._tokens(request))
+                     if batch else "、".join(request.pending_names) or "名称列表")
+            script = (self._batch_script(request) if batch or request.stage == "read" else
+                      self._change_script(request) if request.stage == "change" else
+                      shlex.join(self._tokens(request)))
             task = self._runner.start_adb(
                 f"Settings {request.namespace} · {request.operation} · {label}",
                 ["shell", script], serial=request.serial, timeout=30 if batch else 10)
         except Exception as exc:
             if request.generation == self._generation and self._request is request:
-                self._fail(request, f"无法启动 Settings 请求：{type(exc).__name__}: {exc}")
+                self._fail(request, f"无法启动 Settings 请求：{type(exc).__name__}: {exc}", executed=False)
             raise ValueError(f"无法启动 Settings 请求：{exc}") from exc
         # task_added can synchronously switch namespace/user/device and submit anew.
         if request.generation != self._generation or self._request is not request:
@@ -310,8 +368,9 @@ class SettingsController(QObject):
         self.changed.emit()
         return task
 
-    def _fail(self, request: _Request, details: str) -> None:
-        verifying = request.operation in {"write", "delete"} and request.stage != "mutate"
+    def _fail(self, request: _Request, details: str, *, executed: bool = True) -> None:
+        # A change script may have mutated before failing: never claim either way.
+        verifying = executed and request.stage == "change"
         self.status = "命令已返回，状态未确认" if verifying else "Settings 操作失败"
         self.error = details
         self.task_id = ""
@@ -355,6 +414,24 @@ class SettingsController(QObject):
         self._request = None
         self.changed.emit()
 
+    def _publish_many(self, request: _Request, observed: dict[str, SettingValue]) -> None:
+        mismatches = [f"{name}：请求 {value!r}，实际 " + (repr(observed[name].value) if observed[name].exists else "不存在")
+                      for name, value in request.changes
+                      if not (observed[name].exists and observed[name].value == value)]
+        if request.namespace == self.namespace:
+            self.values = {**self.values, **observed}
+            members = set(self.names) | {name for name, value in observed.items() if value.exists}
+            self.names = tuple(sorted(members - {name for name, value in observed.items() if not value.exists}))
+        if mismatches:
+            self.status = "批量写入读回不一致"
+            self.error = "\n".join(mismatches)
+        else:
+            self.status = f"已写入 {len(request.changes)} 项 {request.namespace} 设置，并确认实际值"
+            self.error = ""
+        self.task_id = ""
+        self._request = None
+        self.changed.emit()
+
     def _task_finished(self, task: Task) -> None:
         request = self._request
         if request is None or task.id != self.task_id or request.generation != self._generation:
@@ -394,27 +471,33 @@ class SettingsController(QObject):
             else:
                 self._next(request, "list-after", verified_values=verified)
             return
-        if request.stage == "mutate":
-            # put is silent; delete explicitly reports its affected row count.
-            response = task.stdout[:-1] if task.stdout.endswith("\n") else task.stdout
-            if response and not (request.operation == "delete" and
-                                 re.fullmatch(r"Deleted [0-9]+ rows", response)):
-                self._fail(request, "Settings 命令包含未识别的返回或诊断。\n" + _task_details(task))
-                return
-            self._next(request, "before")
-            return
-        if request.stage == "get":
+        if request.stage == "read":
             try:
-                observed = _parse_setting_value(task.stdout, request.existed_before)
+                observed = _parse_value_batch(task.stdout, request)
             except ValueError as exc:
-                self._fail(request, f"{exc}。\n{_task_details(task)}")
+                self._fail(request, f"解析 Settings 读取结果失败：{exc}\n{_task_details(task)}")
                 return
-            self._next(request, "after", observed=observed.value)
+            self._publish_value(request, observed[request.name])
+            return
+        if request.stage == "change":
+            try:
+                responses, rest = _parse_mutations(task.stdout, request)
+                for (name, value), (response, code) in zip(request.changes, responses):
+                    # put is silent; delete explicitly reports its affected row count.
+                    text = response[:-1] if response.endswith("\n") else response
+                    if code != 0 or (text and not (value is None and re.fullmatch(r"Deleted [0-9]+ rows", text))):
+                        raise ValueError(f"{name!r}：Settings 命令包含未识别的返回或诊断（返回码 {code}）")
+                observed = _parse_value_batch(rest, request)
+            except ValueError as exc:
+                self._fail(request, f"{exc}\n{_task_details(task)}")
+                return
+            if request.operation == "write-many":
+                self._publish_many(request, observed)
+            else:
+                self._publish_value(request, observed[request.name])
             return
         try:
             names = parse_setting_names(task.stdout)
-            if request.stage not in {"list", "list-after"} and names not in {(), (request.name,)}:
-                raise ValueError("目标 URI 返回了其他名称或多条记录")
         except ValueError as exc:
             self._fail(request, f"解析 content query 失败：{exc}\n{_task_details(task)}")
             return
@@ -438,10 +521,3 @@ class SettingsController(QObject):
                 self.error = self.task_id = ""
                 self._request = None
                 self.changed.emit()
-        elif request.stage == "before":
-            existed = bool(names)
-            self._next(request, "get", existed_before=existed)
-        elif bool(names) != request.existed_before:
-            self._fail(request, "读取期间目标存在性发生变化；未发布不完整值快照。\n" + _task_details(task))
-        else:
-            self._publish_value(request, SettingValue(bool(names), request.observed if names else None))
