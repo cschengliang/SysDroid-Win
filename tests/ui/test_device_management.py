@@ -151,3 +151,12 @@ def test_reboot_to_system_waits_and_bootloader_does_not(window, qtbot):
     window._adb_reboot("")
     finish(window, pending(window, lambda task: task.args == ["reboot"])[-1], "已请求重启设备\n")
     assert window._await is not None and window._await["timeout"] == 180
+
+
+def test_device_selector_label_shows_model_then_serial_and_state():
+    from sysdroid.core.backend import Device
+    from sysdroid.ui.main_window import device_label
+
+    assert device_label(Device("abc123", "device", "Pixel 8")) == "Pixel 8 (abc123) · device"
+    assert device_label(Device("abc123", "unauthorized")) == "abc123 · unauthorized"
+    assert device_label(Device("abc123", "disconnected", "Pixel 8")) == "Pixel 8 (abc123) · 已断开"

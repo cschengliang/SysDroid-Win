@@ -6,13 +6,13 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSplitter, QTableWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
+    QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSplitter, QTableWidget,
     QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from sysdroid.core.backend import OUTPUT_LIMIT, TaskRunner
-from sysdroid.core.processes import ProcessController, ProcessInfo
+from sysdroid.core.processes import SAMPLE_INTERVALS, ProcessController, ProcessInfo, app_package
 from sysdroid.ui import kit as ui_kit
 _ID_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 
@@ -102,6 +102,7 @@ class ProcessPage(QWidget):
         self._local_error = ""
         self._detail_view_key = object()
         self._column_widths_initialized = False
+        self._filtered_query: str | None = None
         self._build_ui()
         self._filter_timer = QTimer(self)
         self._filter_timer.setSingleShot(True)
@@ -109,6 +110,7 @@ class ProcessPage(QWidget):
         self._filter_timer.timeout.connect(self._apply_filter)
         self.search.textChanged.connect(lambda: self._filter_timer.start())
         self.controller.changed.connect(self._controller_changed)
+        self.controller.action_finished.connect(self._action_finished)
         self._update_controls()
 
     def _build_ui(self) -> None:
@@ -117,11 +119,24 @@ class ProcessPage(QWidget):
         self.device_label = _note("请在顶部选择在线设备")
         self.device_label.setObjectName("processDevice")
         first.addWidget(self.device_label, 1)
-        self.auto_box = QCheckBox("每 2 秒自动采样")
+        self.auto_box = QCheckBox("自动采样")
         self.auto_box.setObjectName("processAutoRefresh")
         self.auto_box.setChecked(True)
         self.auto_box.toggled.connect(self.controller.set_auto_refresh)
         first.addWidget(self.auto_box)
+        self.interval_combo = QComboBox()
+        self.interval_combo.setObjectName("processInterval")
+        self.interval_combo.setToolTip("自动采样间隔；上一次采样未返回时跳过本轮，不会叠加请求。")
+        for milliseconds in SAMPLE_INTERVALS:
+            self.interval_combo.addItem(f"每 {milliseconds // 1000} 秒", milliseconds)
+        self.interval_combo.setCurrentIndex(self.interval_combo.findData(self.controller.interval))
+        self.interval_combo.currentIndexChanged.connect(
+            lambda _index: self.controller.set_interval(self.interval_combo.currentData()))
+        first.addWidget(self.interval_combo)
+        self.refresh_button = QPushButton("立即采样")
+        self.refresh_button.setObjectName("processRefresh")
+        self.refresh_button.clicked.connect(self._refresh)
+        first.addWidget(self.refresh_button)
         layout.addLayout(first)
         actions = QHBoxLayout()
         self.search = QLineEdit()
@@ -196,8 +211,12 @@ class ProcessPage(QWidget):
             self.table.horizontalHeaderItem(column).setToolTip(spec.tooltip)
         self.table.setSortingEnabled(True)
         self.table.sortItems(5, Qt.SortOrder.DescendingOrder)
+        # Hidden flags belong to view rows; re-filter after a user re-sort.
+        header.sortIndicatorChanged.connect(lambda *_: QTimer.singleShot(0, self._apply_filter))
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.table.itemDoubleClicked.connect(lambda _item: self._load_details())
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._context_menu)
         self.splitter.addWidget(self.table)
         ui_kit.install_empty_state(self.table, lambda: ui_kit.device_empty_text(
             self.controller.serial, self.controller.device_state, self.table, self.status_label.text(), "等待首次采样"),
@@ -228,7 +247,7 @@ class ProcessPage(QWidget):
         self.details_output_button = QPushButton("详情完整任务输出")
         self.details_output_button.clicked.connect(self._open_details_output)
         detail_layout.addWidget(self.details_output_button)
-        detail_layout.addWidget(ui_kit.info_note("只读：不提权、不结束进程；RSS 与 PSS 分开展示。", "RSS 与 PSS / SwapPss 分别展示。AM 启动字段只取同 PID + 数值 UID 的真实记录；未提供时不推断启动来源。不提权、不结束进程。"))
+        detail_layout.addWidget(ui_kit.info_note("右键进程可结束进程 / 强行停止应用（均需确认）；RSS 与 PSS 分开展示。", "RSS 与 PSS / SwapPss 分别展示。AM 启动字段只取同 PID + 数值 UID 的真实记录；未提供时不推断启动来源。结束进程前会在设备上复核 PID + 启动 ticks，PID 已被复用时不发送信号；不提权，shell 用户只能结束自身进程。"))
         detail_scroll.setWidget(group)
         self.splitter.addWidget(detail_scroll)
         self.splitter.setStretchFactor(0, 3)
@@ -289,7 +308,7 @@ class ProcessPage(QWidget):
         elif not controller.auto_refresh:
             phase = "自动采样已暂停"
         else:
-            phase = "每 2 秒采样已开启"
+            phase = f"每 {controller.interval // 1000} 秒采样已开启"
         state = (*target, phase)
         if state != self._logged_state:
             if controller.active or self._logged_state is not None:
@@ -323,8 +342,10 @@ class ProcessPage(QWidget):
                 summary += "\n" + "；".join(sample.warnings)
         self.summary_label.setText(summary)
         self.summary_label.setToolTip(summary)
-        self._render_table()
-        self._apply_filter()
+        # Rows are updated in place; filtering only re-runs when rows or the
+        # query changed, not on every identical tick.
+        if self._render_table() or self._filtered_query != self.search.text().casefold():
+            self._apply_filter()
         self._render_details()
         self._update_controls()
         self._dirty = False
@@ -336,11 +357,11 @@ class ProcessPage(QWidget):
     def _index_rows(self) -> None:
         self._rows = {tuple(self.table.item(row, 0).data(_ID_ROLE)): row for row in range(self.table.rowCount())}
 
-    def _render_table(self) -> None:
+    def _render_table(self) -> bool:
         processes = self.controller.sample.processes if self.controller.sample else {}
         incoming = {(info.pid, info.start_ticks): info for info in processes.values()}
         if incoming == self._rendered:
-            return
+            return False
         selected = self._selected_identity()
         vertical, horizontal = self.table.verticalScrollBar().value(), self.table.horizontalScrollBar().value()
         sorting = self.table.isSortingEnabled()
@@ -416,12 +437,14 @@ class ProcessPage(QWidget):
             self.table.setUpdatesEnabled(True)
         if incoming and not self._column_widths_initialized:
             self._fit_columns()
+        return True
 
     def _apply_filter(self) -> None:
         if not self._active:
             self._dirty = True
             return
         query = self.search.text().casefold()
+        self._filtered_query = query
         self._index_rows()
         for key, row in self._rows.items():
             hidden = query not in self._search_text.get(key, "")
@@ -467,18 +490,128 @@ class ProcessPage(QWidget):
         controller = self.controller
         identity = self._selected_identity()
         self.output_button.setEnabled(bool(controller.last_task_id))
+        self.refresh_button.setEnabled(bool(controller.serial) and controller.device_state == "device" and not controller.busy)
         matching = controller.details is not None and identity == (controller.details.pid, controller.details.start_ticks)
         self.details_output_button.setEnabled(matching and bool(controller.details_task_id))
 
+    def interval(self) -> int:
+        return self.controller.interval
+
+    def set_interval(self, milliseconds: int) -> None:
+        index = self.interval_combo.findData(milliseconds)
+        if index >= 0:
+            self.interval_combo.setCurrentIndex(index)
+
+    def _refresh(self) -> None:
+        self._local_error = ""
+        try:
+            self.controller.refresh()
+        except ValueError as exc:
+            self._local_error = str(exc)
+            self._render()
+
     def _load_details(self) -> None:
         identity = self._selected_identity()
-        if identity is None or identity[1] is None or self.controller.busy:
+        if identity is None or identity[1] is None:
             return
         self._local_error = ""
         try:
+            # Queued behind an in-flight sample instead of being dropped.
             self.controller.load_details(*identity)
         except ValueError as exc:
             self._local_error = str(exc)
+            self._render()
+
+    def _context_menu(self, position) -> None:
+        item = self.table.itemAt(position)
+        if item is None:
+            return
+        self.table.setCurrentCell(item.row(), 0)
+        identity = self._selected_identity()
+        info = self._rendered.get(identity)
+        if info is None:
+            return
+        menu = QMenu(self.table)
+        reliable = info.start_ticks is not None
+        online = bool(self.controller.serial) and self.controller.device_state == "device"
+        details = menu.addAction("读取详情", self._load_details)
+        details.setEnabled(reliable and online)
+        menu.addSeparator()
+        menu.addAction("复制 PID", lambda: self._copy(str(info.pid)))
+        if info.name:
+            menu.addAction("复制名称", lambda: self._copy(info.name))
+        if info.command_line:
+            menu.addAction("复制命令行", lambda: self._copy(info.command_line))
+        package = app_package(info)
+        if package:
+            menu.addAction("复制包名", lambda: self._copy(package))
+        menu.addSeparator()
+        for title, force in (("结束进程（SIGTERM）…", False), ("强制结束进程（SIGKILL）…", True)):
+            action = menu.addAction(title, lambda force=force: self.kill_selected(force=force))
+            action.setEnabled(reliable and online)
+            if not reliable:
+                action.setToolTip("没有可靠启动 ticks，不能确认进程身份")
+        if package:
+            menu.addAction(f"强行停止应用 {package}…", self.force_stop_selected).setEnabled(online)
+        menu.exec(self.table.viewport().mapToGlobal(position))
+
+    def _copy(self, text: str) -> None:
+        QApplication.clipboard().setText(text)
+
+    def _confirm(self, title: str, text: str) -> bool:
+        answer = QMessageBox.question(self, title, text,
+                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                      QMessageBox.StandardButton.No)
+        return answer == QMessageBox.StandardButton.Yes
+
+    def kill_selected(self, *, force: bool = False) -> None:
+        identity = self._selected_identity()
+        info = self._rendered.get(identity)
+        if info is None or info.start_ticks is None:
+            return
+        serial = self.controller.serial
+        signal = "SIGKILL（不可被进程捕获）" if force else "SIGTERM"
+        if not self._confirm("确认结束进程", f"设备：{serial}\nPID：{info.pid}\n名称：{info.name or '—'}\n"
+                             f"UID：{info.uid if info.uid is not None else '—'}\n\n发送 {signal}？"
+                             "\n发送前会在设备上复核启动 ticks；PID 已被复用时不发送。"):
+            return
+        if self.controller.serial != serial:
+            self._local_error = "确认期间设备已变化；未发送信号。"
+            self._render()
+            return
+        self._local_error = ""
+        try:
+            self.controller.kill_process(info.pid, info.start_ticks, force=force)
+        except ValueError as exc:
+            self._local_error = str(exc)
+        self._render()
+
+    def force_stop_selected(self) -> None:
+        identity = self._selected_identity()
+        info = self._rendered.get(identity)
+        package = app_package(info) if info is not None else None
+        if package is None:
+            return
+        serial, user_id = self.controller.serial, info.uid // 100000
+        if not self._confirm("确认强行停止应用", f"设备：{serial}\n用户：{user_id}\n包：{package}\n\n"
+                             "am force-stop 会结束该应用的全部进程并取消其闹钟 / 任务。继续？"):
+            return
+        if self.controller.serial != serial:
+            self._local_error = "确认期间设备已变化；未提交。"
+            self._render()
+            return
+        self._local_error = ""
+        try:
+            self.controller.force_stop(package, user_id)
+        except ValueError as exc:
+            self._local_error = str(exc)
+        self._render()
+
+    def _action_finished(self, message: str, ok: bool) -> None:
+        self.log_message.emit(("INFO 进程：" if ok else "ERROR 进程：") + message)
+        self._local_error = "" if ok else message
+        self._dirty = True
+        if self._active:
             self._render()
 
     def open_output(self) -> None:

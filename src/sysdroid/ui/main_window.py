@@ -36,6 +36,13 @@ DISCONNECTED = "disconnected"
 STATE_LABELS = {DISCONNECTED: "已断开"}
 
 
+def device_label(device: Device) -> str:
+    """Selector text: model first (when known), then serial and state."""
+    state = STATE_LABELS.get(device.state, device.state)
+    name = f"{device.model} ({device.serial})" if device.model else device.serial
+    return f"{name} · {state}"
+
+
 def _setting_bool(value, default: bool) -> bool:
     if isinstance(value, bool):
         return value
@@ -117,6 +124,10 @@ class AndroidToolboxWindow(QMainWindow):
             process_columns = [process_columns]
         if isinstance(process_columns, list):
             self.process_page.set_visible_columns(process_columns)
+        try:
+            self.process_page.set_interval(int(self._settings.value("processes/interval", 2000)))
+        except (TypeError, ValueError):
+            pass
         geometry = self._settings.value("geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
@@ -742,11 +753,14 @@ class AndroidToolboxWindow(QMainWindow):
         self.device_selector.clear()
         self.device_table.setRowCount(len(devices))
         for row, device in enumerate(devices):
-            self.device_selector.addItem(f"{device.serial} · {device.state}", device.serial)
+            self.device_selector.addItem(device_label(device), device.serial)
+            self.device_selector.setItemData(row, " · ".join(
+                value for value in (device.serial, device.model, device.product, device.transport) if value),
+                Qt.ItemDataRole.ToolTipRole)
             for col, value in enumerate((device.serial, device.state, device.model, device.product, device.device, device.transport)):
                 self.device_table.setItem(row, col, QTableWidgetItem(value))
         if placeholder is not None:
-            self.device_selector.addItem(f"{previous} · {STATE_LABELS[DISCONNECTED]}", previous)
+            self.device_selector.addItem(device_label(placeholder), previous)
         if not devices and placeholder is None:
             self.device_selector.addItem("未发现设备", "")
         index = self.device_selector.findData(previous) if previous else -1
@@ -1005,6 +1019,7 @@ class AndroidToolboxWindow(QMainWindow):
         self._settings.setValue("splitter", self.workspace_splitter.saveState())
         self._settings.setValue("dock_ratio", self._dock_ratio)
         self._settings.setValue("processes/columns", self.process_page.visible_columns())
+        self._settings.setValue("processes/interval", self.process_page.interval())
         self._settings.sync()
         if self._settings.status() != QSettings.Status.NoError:
             self._write_log("[ERROR] 无法保存工作区布局。")

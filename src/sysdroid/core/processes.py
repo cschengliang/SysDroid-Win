@@ -3,13 +3,15 @@ from __future__ import annotations
 import math
 import re
 import shlex
+import threading
 import time
 import uuid
 from dataclasses import dataclass, replace
+from typing import Callable
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 
-from sysdroid.core.backend import OUTPUT_LIMIT, TRUNCATED, Task, TaskRunner
+from sysdroid.core.backend import OUTPUT_LIMIT, TRUNCATED, Task, TaskRunner, significant_stderr
 
 
 @dataclass(frozen=True)
@@ -203,6 +205,40 @@ def _status(output: str, pid: int) -> dict[str, str]:
     return values
 
 
+_SAMPLE_SECTIONS = frozenset({
+    "ps", "cpu", "uptime", "memory", "ps-help", "ps-mode", "clock-ticks", "page-size", "ps-units",
+    "stats-before", "statuses", "stats-after",
+})
+_STAT_PREFIX = re.compile(r"([1-9][0-9]*) \(")
+_STATUS_LINE = re.compile(r"/proc/([1-9][0-9]*)/status:(.*)")
+
+
+def _bulk_stats(text: str) -> dict[int, str]:
+    """Split one ``cat /proc/[0-9]*/stat`` pass into per-PID records."""
+    records: dict[int, str] = {}
+    for line in text.split("\n"):
+        match = _STAT_PREFIX.match(line)
+        if match is None:
+            # Blank separator or the tail of a comm containing a newline; the
+            # head of such a record then fails its own stat validation.
+            continue
+        pid = int(match.group(1))
+        if pid in records:
+            raise ValueError("批量 stat 记录包含重复 PID")
+        records[pid] = line
+    return records
+
+
+def _bulk_status(text: str) -> dict[int, str]:
+    """Group ``grep -H`` status lines (``/proc/PID/status:Key: value``) by PID."""
+    records: dict[int, list[str]] = {}
+    for line in text.split("\n"):
+        match = _STATUS_LINE.fullmatch(line)
+        if match is not None:
+            records.setdefault(int(match.group(1)), []).append(match.group(2))
+    return {pid: "\n".join(lines) for pid, lines in records.items()}
+
+
 def _kb(text: str | None) -> int | None:
     match = re.fullmatch(r"(\d+)\s+kB", text or "")
     return int(match.group(1)) * 1024 if match else None
@@ -237,14 +273,16 @@ def parse_process_sample(output: str, *, nonce: str, clock_ticks: int | None,
     if not {"cpu", "uptime", "memory"} <= sections.keys():
         raise ValueError("采样框架缺少全局段")
     for name in sections:
-        if name not in {"ps", "cpu", "uptime", "memory", "ps-help", "ps-mode", "clock-ticks", "page-size", "ps-units"} and not re.fullmatch(r"pid:[1-9][0-9]*:(stat-before|status|stat-after)", name):
+        if name not in _SAMPLE_SECTIONS:
             raise ValueError(f"未识别采样段：{name}")
     rows = _ps_rows(sections["ps"].text)
-    if any(name.startswith("pid:") and int(name.split(":")[1]) not in rows for name in sections):
-        raise ValueError("采样包含 ps 清单之外的 PID")
-    if any(f"pid:{pid}:{part}" not in sections for pid in rows
-           for part in ("stat-before", "status", "stat-after")):
+    if "stats-before" not in sections or "stats-after" not in sections:
         raise ValueError("采样框架缺少 PID 复核段")
+    # The bulk reads exit non-zero whenever one listed PID exits mid-read, so
+    # their return codes are informational: availability is per record.
+    stats_before = _bulk_stats(sections["stats-before"].text)
+    stats_after = _bulk_stats(sections["stats-after"].text)
+    statuses = _bulk_status(sections["statuses"].text) if "statuses" in sections else {}
     warnings: list[str] = []
 
     def optional(name: str) -> str | None:
@@ -309,21 +347,21 @@ def parse_process_sample(output: str, *, nonce: str, clock_ticks: int | None,
         start = cpu_ticks = threads = started = elapsed = None
         swap = priority = nice = processor = cpu_seconds = None
         try:
-            before_section, after_section = sections.get(f"pid:{pid}:stat-before"), sections.get(f"pid:{pid}:stat-after")
-            if before_section is None or after_section is None or before_section.rc or after_section.rc:
-                raise ValueError("stat 访问被拒绝、进程退出或复核段缺失")
-            before, after = parse_process_stat(before_section.text), parse_process_stat(after_section.text)
+            before_text, after_text = stats_before.get(pid), stats_after.get(pid)
+            if before_text is None or after_text is None:
+                raise ValueError("stat 访问被拒绝、进程退出或复核记录缺失")
+            before, after = parse_process_stat(before_text), parse_process_stat(after_text)
             if before.pid != pid or after.pid != pid or before.start_ticks != after.start_ticks:
                 raise ValueError("PID 已复用，丢弃混合 /proc 字段")
             start, cpu_ticks = after.start_ticks, after.cpu_ticks
             ppid, name, state, threads = after.ppid, after.name, after.state, after.threads
             vss = after.vss_bytes
             priority, nice, processor = after.priority, after.nice, after.processor
-            status_section = sections.get(f"pid:{pid}:status")
+            status_text = statuses.get(pid)
             status_values: dict[str, str] = {}
-            if status_section is not None and status_section.rc == 0:
+            if status_text is not None:
                 try:
-                    status_values = _status(status_section.text, pid)
+                    status_values = _status(status_text, pid)
                 except ValueError as exc:
                     unavailable["status"] = str(exc)
             else:
@@ -614,30 +652,13 @@ command_section cpu cat /proc/stat
 command_section uptime cat /proc/uptime
 command_section memory cat /proc/meminfo
 if [ "$ps_rc" -eq 0 ]; then
-    emit "$ps_output" | {
-        IFS= read -r header
-        pid_column=0
-        column=0
-        for field in $header; do
-            column=$((column + 1))
-            if [ "$field" = PID ]; then pid_column=$column; fi
-        done
-        if [ "$pid_column" -gt 0 ]; then
-            while IFS= read -r ps_line; do
-                column=0
-                pid=
-                for field in $ps_line; do
-                    column=$((column + 1))
-                    if [ "$column" -eq "$pid_column" ]; then pid=$field; break; fi
-                done
-                case "$pid" in ''|*[!0-9]*) continue ;; esac
-                if [ "$pid" -le 0 ]; then continue; fi
-                stat_section "pid:$pid:stat-before" "/proc/$pid/stat"
-                status_section "pid:$pid:status" "/proc/$pid/status"
-                stat_section "pid:$pid:stat-after" "/proc/$pid/stat"
-            done
-        fi
-    }
+    # Three bulk reads instead of three shell reads per PID: stat before and
+    # after the status pass detects PID reuse without a per-process loop.
+    set +f
+    command_section stats-before cat /proc/[0-9]*/stat 2>/dev/null
+    command_section statuses grep -H -E '^(Pid|Uid|VmRSS|VmSize|VmSwap|Threads):' /proc/[0-9]*/status 2>/dev/null
+    command_section stats-after cat /proc/[0-9]*/stat 2>/dev/null
+    set -f
 fi
 emit "DONE $nonce"
 '''
@@ -671,10 +692,97 @@ class _Request:
     task_id: str = ""
 
 
+@dataclass(frozen=True)
+class _Outcome:
+    """Result of parsing one finished request; computed off the UI thread."""
+    error: str = ""
+    capabilities: tuple[str, dict[str, int], int | None, int | None] | None = None
+    capability_error: str = ""
+    sample: ProcessSample | None = None
+    parsed: ProcessSample | None = None
+    total_cpu_percent: float | None = None
+    details: ProcessDetails | None = None
+    ps_failed: bool = False
+
+
+def _discover(stdout: str, nonce: str) -> tuple[str, dict[str, int], int | None, int | None]:
+    sections = _frame(stdout, nonce)
+    mode = sections.get("ps-mode")
+    if mode is None or mode.rc or mode.text.strip() not in {"columns", "all", "plain"}:
+        raise ValueError("ps 能力选择结果缺失或无效")
+    values = []
+    for name in ("clock-ticks", "page-size"):
+        section = sections.get(name)
+        value = _number(section.text.strip()) if section and section.rc == 0 else None
+        values.append(value if value is not None and value > 0 else None)
+    return mode.text.strip(), _ps_scales(sections), values[0], values[1]
+
+
+def _analyze(request: _Request, status: str, exit_code: int | None, stdout: str, stderr: str,
+             clock_ticks: int | None, page_size: int | None,
+             baseline: ProcessSample | None) -> _Outcome:
+    """Pure parsing step. Runs in a worker thread and touches no controller state."""
+    if status != "succeeded" or exit_code != 0:
+        return _Outcome(error=f"任务状态：{status}；退出码：{exit_code}")
+    if TRUNCATED in stderr:
+        return _Outcome(error="stderr 已截断，采样结果不完整")
+    capabilities = None
+    capability_error = ""
+    if request.capabilities:
+        try:
+            capabilities = _discover(stdout, request.nonce)
+            clock_ticks, page_size = capabilities[2], capabilities[3]
+        except ValueError as exc:
+            capability_error = str(exc)
+            return _Outcome(error=capability_error, capability_error=capability_error)
+    try:
+        if request.operation == "sample":
+            parsed = parse_process_sample(stdout, nonce=request.nonce, clock_ticks=clock_ticks, page_size=page_size)
+            return _Outcome(capabilities=capabilities, sample=apply_cpu_delta(baseline, parsed), parsed=parsed,
+                            total_cpu_percent=aggregate_cpu_percent(baseline, parsed))
+        details = parse_process_details(stdout, nonce=request.nonce, pid=request.pid,
+                                        start_ticks=request.start_ticks, uid=request.uid)
+        return _Outcome(capabilities=capabilities, details=details)
+    except ValueError as exc:
+        return _Outcome(error=str(exc), capabilities=capabilities,
+                        ps_failed=str(exc).startswith("关键 ps 清单"))
+    except Exception as exc:  # parser bugs must never wedge the request slot
+        return _Outcome(error=f"解析异常：{type(exc).__name__}: {exc}", capabilities=capabilities)
+
+
+Executor = Callable[[Callable[[], object], Callable[[object], None]], None]
+
+# Allowed automatic sampling intervals in milliseconds.
+SAMPLE_INTERVALS = (1000, 2000, 5000, 10000)
+# Discovery retry backoff after failures (seconds), capped at the last value.
+_DISCOVERY_BACKOFF = (2, 5, 15, 30, 60)
+# A fixed ps mode that fails this many consecutive times is re-discovered.
+_PS_FAILURE_LIMIT = 3
+_KILL_SIGNALS = {"TERM": "TERM", "KILL": "KILL"}
+
+
+def _kill_script(pid: int, start_ticks: int, signal: str) -> str:
+    # Re-verify PID + start ticks on the device right before signalling, so a
+    # PID reused since the last sample is never killed.
+    return f'''set -f
+pid={pid}
+expected={start_ticks}
+if ! IFS= read -r line 2>/dev/null < /proc/$pid/stat; then echo "进程 $pid 已退出" >&2; exit 3; fi
+rest=${{line##*) }}
+set -- $rest
+if [ "${{20}}" != "$expected" ]; then echo "PID $pid 已被其他进程复用，未发送信号" >&2; exit 4; fi
+kill -s {signal} $pid
+'''
+
+
 class ProcessController(QObject):
     changed = Signal()
+    # (message, ok) for kill / force-stop actions.
+    action_finished = Signal(str, bool)
+    _parsed = Signal(object)
 
-    def __init__(self, runner: TaskRunner, parent: QObject | None = None) -> None:
+    def __init__(self, runner: TaskRunner, parent: QObject | None = None, *,
+                 executor: Executor | None = None) -> None:
         super().__init__(parent)
         self._runner = runner
         self.serial = ""
@@ -698,16 +806,57 @@ class ProcessController(QObject):
         self._scales: dict[str, int] = {}
         self._clock_ticks: int | None = None
         self._page_size: int | None = None
+        self._discovery_failures = 0
+        self._discovery_retry_at = 0.0
+        self._ps_failures = 0
         self._first_pending = False
+        self._pending_details: tuple[int, int, int, int] | None = None
+        self._actions: dict[str, tuple[int, str]] = {}
+        self._monotonic = time.monotonic
+        self._executor = executor or self._thread_executor
+        self._parsed.connect(self._deliver, Qt.ConnectionType.QueuedConnection)
         self._timer = QTimer(self)
         self._timer.setInterval(2000)
         self._timer.timeout.connect(self._tick)
         runner.task_finished.connect(self._task_finished)
 
+    # -- worker plumbing -------------------------------------------------
+    def _thread_executor(self, job: Callable[[], object], done: Callable[[object], None]) -> None:
+        def run() -> None:
+            result = job()
+            try:
+                self._parsed.emit((done, result))
+            except RuntimeError:
+                pass  # controller already destroyed; nothing to publish to
+        threading.Thread(target=run, name="process-parse", daemon=True).start()
+
+    def _deliver(self, payload: tuple[Callable[[object], None], object]) -> None:
+        done, result = payload
+        done(result)
+
+    # -- state -----------------------------------------------------------
     @property
     def busy(self) -> bool:
-        # Context changes never release a physical, non-interruptible ADB slot.
+        # Context changes never release a physical, non-interruptible ADB slot;
+        # the slot is also held while the response is parsed in the worker.
         return self._submitting or self._request is not None
+
+    @property
+    def interval(self) -> int:
+        return self._timer.interval()
+
+    @property
+    def details_pending(self) -> bool:
+        return self._pending_details is not None
+
+    def set_interval(self, milliseconds: int) -> None:
+        if milliseconds not in SAMPLE_INTERVALS:
+            raise ValueError("采样间隔无效")
+        if milliseconds == self._timer.interval():
+            return
+        self._timer.setInterval(milliseconds)
+        self._update_timer()
+        self.changed.emit()
 
     def set_device(self, serial: str, state: str = "device") -> None:
         if (serial, state) == (self.serial, self.device_state):
@@ -721,6 +870,9 @@ class ProcessController(QObject):
         self._ps_mode = None
         self._scales = {}
         self._clock_ticks = self._page_size = None
+        self._discovery_failures = self._ps_failures = 0
+        self._discovery_retry_at = 0.0
+        self._pending_details = None
         self.error = ""
         self.status = "等待在线设备" if not self._online() else "等待首次采样"
         self._first_pending = self.active and self._online()
@@ -738,6 +890,7 @@ class ProcessController(QObject):
         self.total_cpu_percent = None
         self.details = None
         self.details_task_id = ""
+        self._pending_details = None
         self._first_pending = active and self._online()
         self.status = "等待首次采样" if active else "页面隐藏，采样已暂停"
         self._update_timer()
@@ -764,19 +917,33 @@ class ProcessController(QObject):
         else:
             self._timer.stop()
 
+    def _discovery_waiting(self) -> bool:
+        return self._ps_mode is None and self._monotonic() < self._discovery_retry_at
+
     def _start_first(self) -> None:
-        if self._first_pending and self.active and self._online() and not self.busy:
+        if not self.active or not self._online() or self.busy:
+            return
+        if self._start_pending_details():
+            return
+        if self._first_pending and not self._discovery_waiting():
             self._first_pending = False
             self._start_sample(True)
 
     def _tick(self) -> None:
-        if self.active and self.auto_refresh and self._online() and not self.busy:
+        if not (self.active and self._online()) or self.busy:
+            return
+        if self._start_pending_details():
+            return
+        if self.auto_refresh and not self._discovery_waiting():
             self._first_pending = False
             self._start_sample(True)
 
-    def _require_ready(self) -> None:
+    def _require_online(self) -> None:
         if not self._online():
             raise ValueError("请先选择已连接的在线设备")
+
+    def _require_ready(self) -> None:
+        self._require_online()
         if self.busy:
             raise ValueError("进程采样 / 详情请求尚未返回，请等待")
 
@@ -791,17 +958,55 @@ class ProcessController(QObject):
                            capabilities=self._ps_mode is None)
         return self._submit(request, _sample_script(nonce, self._ps_mode, self._scales), 5)
 
-    def load_details(self, pid: int, start_ticks: int | None) -> Task | None:
-        self._require_ready()
+    def _identity(self, pid: int, start_ticks: int | None) -> ProcessInfo:
         if type(pid) is not int or pid <= 0 or type(start_ticks) is not int or start_ticks < 0:
             raise ValueError("身份不可确认：没有可靠 PID / 启动 ticks，不能加载可能误配的详情")
         info = self.sample.processes.get(pid) if self.sample else None
         if info is None or info.start_ticks != start_ticks:
             raise ValueError("选中的进程身份已变化，请重新采样 / 选择")
+        return info
+
+    def load_details(self, pid: int, start_ticks: int | None) -> Task | None:
+        """Read details now, or queue them behind the request in flight.
+
+        Returns the task when submitted immediately and ``None`` when queued;
+        only the most recent queued request is kept.
+        """
+        self._require_online()
+        info = self._identity(pid, start_ticks)
+        if self.busy:
+            self._pending_details = (pid, start_ticks, self._generation, self._visibility)
+            self.status = f"已排队：当前请求返回后读取进程 {pid} 详情"
+            self.changed.emit()
+            return None
+        self._pending_details = None
+        return self._submit_details(pid, start_ticks, info.uid)
+
+    def _submit_details(self, pid: int, start_ticks: int, uid: int | None) -> Task | None:
         nonce = uuid.uuid4().hex
         request = _Request(self._generation, self._visibility, "details", nonce, False,
-                           pid=pid, start_ticks=start_ticks, uid=info.uid)
+                           pid=pid, start_ticks=start_ticks, uid=uid)
         return self._submit(request, _details_script(nonce, pid), 15)
+
+    def _start_pending_details(self) -> bool:
+        pending, self._pending_details = self._pending_details, None
+        if pending is None:
+            return False
+        pid, start_ticks, generation, visibility = pending
+        if (generation, visibility) != (self._generation, self._visibility):
+            return False
+        try:
+            info = self._identity(pid, start_ticks)
+        except ValueError as exc:
+            self.status = "排队的详情请求已取消"
+            self.error = f"进程 {pid}：{exc}"
+            self.changed.emit()
+            return False
+        try:
+            self._submit_details(pid, start_ticks, info.uid)
+        except ValueError:
+            pass  # _submit already published the failure
+        return True
 
     def _submit(self, request: _Request, script: str, timeout: int) -> Task | None:
         self._request = request
@@ -837,40 +1042,55 @@ class ProcessController(QObject):
         return task if request.generation == self._generation and request.visibility == self._visibility else None
 
     def _task_finished(self, task: Task) -> None:
+        if task.id in self._actions:
+            self._action_finished(task)
+            return
         request = self._request
-        if request is None or task.id != request.task_id:
+        if request is None or task.id != request.task_id or request.task_id == "":
+            return
+        # Keep the slot occupied until the worker result is applied, and mark
+        # the request so a duplicate finished signal is ignored.
+        request.task_id = ""
+        baseline = self._baseline if request.generation == self._generation and request.visibility == self._visibility else None
+        status, exit_code, stdout, stderr = task.status, task.exit_code, task.stdout, task.stderr
+        clock_ticks, page_size = self._clock_ticks, self._page_size
+        self._executor(lambda: _analyze(request, status, exit_code, stdout, stderr, clock_ticks, page_size, baseline),
+                       lambda outcome: self._apply(request, task, outcome))
+
+    def _apply(self, request: _Request, task: Task, outcome: _Outcome) -> None:
+        if self._request is not request:
             return
         self._request = None
         same_device = request.generation == self._generation
         current = same_device and request.visibility == self._visibility
+        discovery_failed = same_device and request.capabilities and outcome.capabilities is None
         if same_device and request.capabilities:
-            # A timed-out or damaged discovery must not retry all candidates
-            # every tick. Keep the first explicit candidate until target change.
-            self._ps_mode = "columns"
-        try:
-            if task.status != "succeeded" or task.exit_code != 0:
-                raise ValueError(f"任务状态：{task.status}；退出码：{task.exit_code}")
-            if TRUNCATED in task.stderr:
-                raise ValueError("stderr 已截断，采样结果不完整")
-            if same_device and request.capabilities:
-                sections = _frame(task.stdout, request.nonce)
-                mode = sections.get("ps-mode")
-                if mode is None or mode.rc or mode.text.strip() not in {"columns", "all", "plain"}:
-                    raise ValueError("ps 能力选择结果缺失或无效")
-                self._ps_mode = mode.text.strip()
-                self._scales = _ps_scales(sections)
-                for name, field in (("clock-ticks", "_clock_ticks"), ("page-size", "_page_size")):
-                    section = sections.get(name)
-                    value = _number(section.text.strip()) if section and section.rc == 0 else None
-                    setattr(self, field, value if value is not None and value > 0 else None)
-            if current:
+            if outcome.capabilities is not None:
+                self._ps_mode, self._scales, self._clock_ticks, self._page_size = outcome.capabilities
+                self._discovery_failures = 0
+                self._discovery_retry_at = 0.0
+            else:
+                # Never lock a guessed ps mode after a timed-out or damaged
+                # discovery: retry discovery later with a capped backoff.
+                delay = _DISCOVERY_BACKOFF[min(self._discovery_failures, len(_DISCOVERY_BACKOFF) - 1)]
+                self._discovery_failures += 1
+                self._discovery_retry_at = self._monotonic() + delay
+        if same_device and request.operation == "sample" and not request.capabilities:
+            if outcome.ps_failed:
+                self._ps_failures += 1
+                if self._ps_failures >= _PS_FAILURE_LIMIT:
+                    # The fixed ps mode keeps failing: re-run capability discovery.
+                    self._ps_mode = None
+                    self._ps_failures = 0
+            elif not outcome.error:
+                self._ps_failures = 0
+        if current:
+            if not outcome.error:
                 if request.operation == "sample":
-                    parsed = parse_process_sample(task.stdout, nonce=request.nonce,
-                                                  clock_ticks=self._clock_ticks, page_size=self._page_size)
-                    sample = apply_cpu_delta(self._baseline, parsed)
-                    self.total_cpu_percent = aggregate_cpu_percent(self._baseline, parsed)
+                    sample = outcome.sample
+                    self.total_cpu_percent = outcome.total_cpu_percent
                     self.sample = sample
-                    self._baseline = parsed
+                    self._baseline = outcome.parsed
                     self.sampled_at = time.time()
                     if self.details and (self.details.pid not in sample.processes or
                                          sample.processes[self.details.pid].start_ticks != self.details.start_ticks):
@@ -878,18 +1098,78 @@ class ProcessController(QObject):
                         self.details_task_id = ""
                     self.status = f"已采样 {len(sample.processes)} 个进程" + (" · 自动采样已暂停" if not self.auto_refresh else "")
                 else:
-                    self.details = parse_process_details(task.stdout, nonce=request.nonce, pid=request.pid,
-                                                         start_ticks=request.start_ticks, uid=request.uid)
+                    self.details = outcome.details
                     self.details_task_id = task.id
                     self.status = f"已读取进程 {request.pid} 详情（未改变 CPU 基线）"
                 self.error = ""
-        except ValueError as exc:
-            if current:
+            else:
                 self.status = "进程采样失败，保留最后快照" if request.operation == "sample" else "进程详情不可用"
-                self.error = f"{exc}\nstderr：\n{task.stderr}\nstdout：\n{task.stdout}"
+                if discovery_failed:
+                    wait = max(0, round(self._discovery_retry_at - self._monotonic()))
+                    self.status = f"ps 能力探测失败，约 {wait} 秒后自动重试（手动刷新可立即重试）"
+                self.error = f"{outcome.error}\nstderr：\n{task.stderr}\nstdout：\n{task.stdout}"
                 if request.operation == "details":
                     self.details = None
                     self.details_task_id = ""
         self.changed.emit()
-        if self._first_pending:
+        if self._pending_details is not None or self._first_pending:
             QTimer.singleShot(0, self._start_first)
+
+    # -- actions ---------------------------------------------------------
+    def kill_process(self, pid: int, start_ticks: int | None, *, force: bool = False) -> Task:
+        """Send SIGTERM (or SIGKILL) after re-verifying the process identity on device."""
+        self._require_online()
+        self._identity(pid, start_ticks)
+        signal = _KILL_SIGNALS["KILL" if force else "TERM"]
+        return self._start_action(f"结束进程 {pid}（SIG{signal}）",
+                                  ["shell", shlex.join(["sh", "-c", _kill_script(pid, start_ticks, signal)])], 10)
+
+    def force_stop(self, package: str, user_id: int) -> Task:
+        from sysdroid.core.apks import validate_package
+        self._require_online()
+        validate_package(package)
+        if type(user_id) is not int or user_id < 0:
+            raise ValueError("用户 ID 无效")
+        return self._start_action(f"强行停止应用 {package}（用户 {user_id}）",
+                                  ["shell", shlex.join(["am", "force-stop", "--user", str(user_id), package])], 15)
+
+    def _start_action(self, title: str, args: list[str], timeout: int) -> Task:
+        try:
+            task = self._runner.start_adb(title, args, serial=self.serial, timeout=timeout)
+        except Exception as exc:
+            raise ValueError(f"无法启动操作：{exc}") from exc
+        self._actions[task.id] = (self._generation, title)
+        if task.status in {"succeeded", "failed", "cancelled", "timed_out"}:
+            self._action_finished(task)
+        return task
+
+    def _action_finished(self, task: Task) -> None:
+        generation, title = self._actions.pop(task.id)
+        if generation != self._generation:
+            return
+        diagnostic = significant_stderr(task.stderr).strip()
+        ok = task.status == "succeeded" and task.exit_code == 0 and not re.search(
+            r"(?im)^\s*(?:Error\b|.*Exception\b|.*Permission denied|.*Operation not permitted)", task.stdout + "\n" + diagnostic)
+        if ok:
+            message = f"{title}：已完成"
+        else:
+            detail = (diagnostic or task.stdout.strip() or f"状态 {task.status} / 退出码 {task.exit_code}")
+            if re.search(r"Operation not permitted|Permission denied", detail):
+                detail += "\n（shell 用户只能结束自身进程；应用进程请使用「强行停止应用」）"
+            message = f"{title}：失败\n{detail}"
+        self.action_finished.emit(message, ok)
+        # Show the effect promptly without overlapping the sampling slot.
+        self._first_pending = True
+        self._start_first()
+
+
+def app_package(info: ProcessInfo) -> str | None:
+    """Package name of an app process (UID >= 10000), or None when unknown."""
+    from sysdroid.core.apks import _PACKAGE
+    if info.uid is None or info.uid % 100000 < 10000:
+        return None
+    for candidate in (info.command_line, info.name):
+        token = (candidate or "").split(" ", 1)[0].split(":", 1)[0]
+        if "." in token and _PACKAGE.fullmatch(token):
+            return token
+    return None
