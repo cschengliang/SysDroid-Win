@@ -2,13 +2,13 @@
 # Interpreter: embedded CPython 3.14.8 x64 (lib/python-3.14.8-embed-amd64)
 # Install: lib\python-3.14.8-embed-amd64\python.exe -m pip install -r requirements.txt
 # Versions pinned to the current dev environment (pip list, 2026-10-09).
-# Exact versions of a build are recorded in dist/AndroidToolbox-win-x64/requirements-*.txt
+# Exact versions of a build are recorded in dist/SysDroid-win-x64/requirements-*.txt
 
 # --- Runtime (imported by the app) ---
 PySide6==6.11.2               # Qt 6 GUI: QtCore / QtGui / QtWidgets
 adbutils==2.12.0              # ADB client; also pulls in Pillow, requests
 
-# --- Build (build_android_toolbox.py, portable_assets.py, AndroidToolbox.spec) ---
+# --- Build (build_sysdroid.py, portable_assets.py, SysDroid.spec) ---
 pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.8
 pefile==2024.8.26

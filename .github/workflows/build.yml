@@ -129,7 +129,7 @@ jobs:
           # child the build uses to verify OS-signed DLLs (icu.dll, propsys.dll). Let 5.1 use its defaults.
           Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue
           try {
-            & "$env:PY_DIR\python.exe" -s scripts\build_android_toolbox.py
+            & "$env:PY_DIR\python.exe" -s scripts\build_sysdroid.py
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           } finally {
             Remove-Item $netrc -Force -ErrorAction SilentlyContinue
@@ -144,9 +144,9 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $ver = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { $env:GITHUB_SHA.Substring(0, 7) }
           New-Item -ItemType Directory -Force out | Out-Null
-          $zip = "AndroidToolbox-win-x64-$ver.zip"
-          Copy-Item dist\AndroidToolbox-win-x64.zip "out\$zip"
-          Copy-Item dist\AndroidToolbox-win-x64.files.sha256 "out\AndroidToolbox-win-x64-$ver.files.sha256"
+          $zip = "SysDroid-win-x64-$ver.zip"
+          Copy-Item dist\SysDroid-win-x64.zip "out\$zip"
+          Copy-Item dist\SysDroid-win-x64.files.sha256 "out\SysDroid-win-x64-$ver.files.sha256"
           $hash = (Get-FileHash "out\$zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  $zip" | Set-Content "out\$zip.sha256" -Encoding ascii
           "version=$ver" >> $env:GITHUB_OUTPUT
@@ -154,7 +154,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AndroidToolbox-win-x64-${{ steps.pkg.outputs.version }}
+          name: SysDroid-win-x64-${{ steps.pkg.outputs.version }}
           path: out/*
           if-no-files-found: error
 
@@ -165,8 +165,8 @@ jobs:
         with:
           name: build-logs-${{ github.run_id }}
           path: |
-            build/android-toolbox/**/*.json
-            build/android-toolbox/**/*.log
+            build/sysdroid/**/*.json
+            build/sysdroid/**/*.log
           if-no-files-found: ignore
 
       - name: Publish GitHub Release
