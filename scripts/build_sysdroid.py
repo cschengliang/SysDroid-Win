@@ -348,7 +348,6 @@ def validate_stdlib_analysis(analysis, source_root: Path, stage: Path, stdlib: P
         path = Path(source).resolve()
         approved = _beneath(path, EMBEDDED_ROOT) or _beneath(path, stage)
         app_root = source_root / "src" / "sysdroid"
-        approved = approved or path == source_root / "sysdroid.py"
         approved = approved or (_beneath(path, app_root) and path.suffix == ".py")
         approved = approved or (path.parent == source_root / "assets" / "icons" and path.suffix == ".png"
                                 and path.name.startswith("sysdroid-"))

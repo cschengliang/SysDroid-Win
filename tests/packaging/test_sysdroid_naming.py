@@ -39,6 +39,9 @@ def test_build_outputs_use_the_sysdroid_name():
     spec = (ROOT / "SysDroid.spec").read_text(encoding="utf-8")
     assert 'name="SysDroid",' in spec and 'name="SysDroid-win-x64",' in spec
     assert "icon=[str(exe_icon)]" in spec and "version=version_info" in spec
+    # Freezing the root sysdroid.py would shadow the package and collect nothing of the app.
+    assert '[str(source_root / "src" / "sysdroid" / "__main__.py")]' in spec
+    assert 'source_root / "sysdroid.py"' not in spec
     workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
     assert "name: SysDroid-win-x64-${{ steps.pkg.outputs.version }}" in workflow
     assert "scripts\\build_sysdroid.py" in workflow

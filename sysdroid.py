@@ -1,7 +1,8 @@
 """Source launcher for SysDroid.
 
-Kept at the repository root so start_sysdroid.bat, the README commands and the
-PyInstaller spec keep a stable entry point; the application lives in src/sysdroid.
+Kept at the repository root so start_sysdroid.bat and the README commands have a
+stable entry point; the application lives in src/sysdroid. The frozen EXE starts from
+src/sysdroid/__main__.py instead, because this file's name shadows the package.
 """
 import sys
 from pathlib import Path

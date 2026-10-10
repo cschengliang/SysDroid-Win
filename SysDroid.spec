@@ -90,8 +90,9 @@ for category, filename in (
 # Keep the contributed adbutils hook and the normal Qt/Pillow/certifi hooks.
 # No collect_all(), QML tree, development scripts, tests, or Qt Addons are bundled.
 a = Analysis(
-    [str(source_root / "sysdroid.py")],
-    pathex=[str(stdlib), str(source_root / "src"), str(source_root)],
+    # Not the root sysdroid.py launcher: its name would shadow the sysdroid package.
+    [str(source_root / "src" / "sysdroid" / "__main__.py")],
+    pathex=[str(stdlib), str(source_root / "src")],
     binaries=binaries,
     datas=datas,
     hiddenimports=[

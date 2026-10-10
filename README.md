@@ -50,7 +50,7 @@ lib\python-3.14.8-embed-amd64\python.exe -s sysdroid.py
 ### 代码结构
 
 ```text
-sysdroid.py                 # 源码启动器（供 bat、README 命令和 PyInstaller spec 使用）
+sysdroid.py                 # 源码启动器（供 bat 和 README 命令使用；EXE 从 src/sysdroid/__main__.py 启动）
 start_sysdroid.bat          # 双击启动
 SysDroid.spec               # PyInstaller 配置（EXE 图标与版本信息）
 assets/                     # SysDroid.ico、icons/sysdroid-<尺寸>.png；icon-src/ 为 SVG 源与生成脚本
