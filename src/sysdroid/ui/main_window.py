@@ -7,8 +7,8 @@ from typing import Callable
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QBoxLayout, QButtonGroup, QCheckBox, QComboBox, QFrame, QGroupBox,
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
+    QAbstractItemView, QApplication, QBoxLayout, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
     QMenu, QMenuBar, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
     QSizePolicy, QSplitter, QStackedWidget, QStatusBar,
     QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
@@ -16,9 +16,11 @@ from PySide6.QtWidgets import (
 
 from sysdroid.app_info import APP_NAME, APP_TITLE, APP_VERSION
 from sysdroid.core.backend import DATA_DIR, STATUS_LABELS, Device, Task, TaskRunner, parse_devices, significant_stderr
+from sysdroid.core.device_info import MdnsService, STATUS_SCRIPT, parse_device_status, parse_mdns_services, validate_pairing
 from sysdroid.core.devices import DeviceTracker
 from sysdroid.core.users import AndroidUserController
 from sysdroid.ui import kit as ui_kit
+from sysdroid.ui.tables import TableTools
 from sysdroid.ui import theme
 from sysdroid.ui.pages.apk_page import ApkPage
 from sysdroid.ui.pages.command_page import CommandLibraryPage
@@ -34,6 +36,13 @@ DOCK_LOG, DOCK_TASKS = 0, 1
 # silently switching every page to another phone.
 DISCONNECTED = "disconnected"
 STATE_LABELS = {DISCONNECTED: "已断开"}
+
+
+def device_label(device: Device) -> str:
+    """Selector text: model first (when known), then serial and state."""
+    state = STATE_LABELS.get(device.state, device.state)
+    name = f"{device.model} ({device.serial})" if device.model else device.serial
+    return f"{name} · {state}"
 
 
 def _setting_bool(value, default: bool) -> bool:
@@ -117,6 +126,10 @@ class AndroidToolboxWindow(QMainWindow):
             process_columns = [process_columns]
         if isinstance(process_columns, list):
             self.process_page.set_visible_columns(process_columns)
+        try:
+            self.process_page.set_interval(int(self._settings.value("processes/interval", 2000)))
+        except (TypeError, ValueError):
+            pass
         geometry = self._settings.value("geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
@@ -315,7 +328,7 @@ class AndroidToolboxWindow(QMainWindow):
         self.home_page = self._build_adb_home_page()
         self.command_page = CommandLibraryPage(self.runner)
         self.prop_page = PropPage(self.runner)
-        self.scrcpy_page = ScrcpyPage(self.runner)
+        self.scrcpy_page = ScrcpyPage(self.runner, config_path=DATA_DIR / "scrcpy.json")
         self.settings_page = SettingsPage(self.runner, self.users)
         self.apk_page = ApkPage(self.runner, self.users)
         self.process_page = ProcessPage(self.runner)
@@ -377,6 +390,15 @@ class AndroidToolboxWindow(QMainWindow):
         quick.setShortcut(QKeySequence("Ctrl+K"))
         quick.triggered.connect(self._quick_command)
         self.addAction(quick)
+        # F5 / Ctrl+F go to the table of whatever has focus (task panel) or the current page.
+        for name, sequence, slot in (("刷新当前列表", QKeySequence("F5"), lambda: self.page_shortcut("refresh")),
+                                     ("搜索当前列表", QKeySequence(QKeySequence.StandardKey.Find),
+                                      lambda: self.page_shortcut("search"))):
+            action = QAction(name, self)
+            action.setShortcut(sequence)
+            action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+            action.triggered.connect(slot)
+            self.addAction(action)
 
     def _build_adb_home_page(self) -> QWidget:
         scroll = QScrollArea()
@@ -405,6 +427,23 @@ class AndroidToolboxWindow(QMainWindow):
         info.addWidget(self.device_details)
         self.android_version = QLabel("Android：未检测")
         info.addWidget(self.android_version)
+        facts = QGridLayout()
+        facts.setHorizontalSpacing(18)
+        facts.setVerticalSpacing(2)
+        self.device_facts: dict[str, QLabel] = {}
+        for index, (key, title) in enumerate((("battery", "电量"), ("resolution", "分辨率"), ("abi", "ABI"),
+                                              ("selinux", "SELinux"), ("ip", "IP"), ("fingerprint", "指纹"))):
+            label = ui_kit.set_role(QLabel(f"{title}：—"), "hint")
+            label.setObjectName(f"deviceFact_{key}")
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            label.setProperty("factTitle", title)
+            self.device_facts[key] = label
+            if key == "fingerprint":
+                label.setWordWrap(True)
+                facts.addWidget(label, 2, 0, 1, 3)
+            else:
+                facts.addWidget(label, index // 3, index % 3)
+        info.addLayout(facts)
         pills = QHBoxLayout()
         pills.setSpacing(6)
         self.privilege_labels = {}
@@ -446,6 +485,15 @@ class AndroidToolboxWindow(QMainWindow):
         row.addWidget(self.address_input, 1)
         row.addWidget(self._button("连接", self._connect_wireless, True))
         connection.addLayout(row)
+        wireless_row = QHBoxLayout()
+        self.pair_button = self._button("配对码配对…", lambda: self._pair_wireless())
+        self.pair_button.setToolTip("Android 11+：开发者选项 → 无线调试 → 使用配对码配对设备（adb pair）")
+        self.mdns_button = self._button("发现设备", self._discover_mdns)
+        self.mdns_button.setToolTip("通过 adb mdns services 查找同一局域网内开启无线调试的设备")
+        wireless_row.addWidget(self.pair_button)
+        wireless_row.addWidget(self.mdns_button)
+        wireless_row.addStretch()
+        connection.addLayout(wireless_row)
         self.connection_note = ui_kit.set_role(QLabel("尚未刷新 ADB Server"), "hint")
         self.connection_note.setWordWrap(True)
         connection.addWidget(self.connection_note)
@@ -489,8 +537,8 @@ class AndroidToolboxWindow(QMainWindow):
         self.device_table.horizontalHeader().setDefaultSectionSize(140)
         self.device_table.setMinimumHeight(150)
         self.device_table.cellDoubleClicked.connect(lambda row, column: self._select_highlighted())
-        self.device_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.device_table.customContextMenuRequested.connect(self._device_context_menu)
+        self.device_tools = TableTools(self.device_table, export_name="devices", menu=self._device_menu,
+                                       refresh=self._refresh_devices)
         ui_kit.install_empty_state(self.device_table, lambda: self._runtime_error or "未发现设备\n连接 USB 设备或输入无线 ADB 地址后点击「刷新」")
         box_layout.addWidget(self.device_table)
         layout.addWidget(box, 1)
@@ -498,6 +546,7 @@ class AndroidToolboxWindow(QMainWindow):
             "仅 state=device 的设备可执行命令；USB 设备需拔线断开。",
             "仅 state=device 可执行设备命令。USB 断开需拔线；无线连接使用 adb connect / disconnect。"))
         scroll.setWidget(page)
+        scroll.table_tools = self.device_tools
         return scroll
 
     def _build_log_panel(self) -> QWidget:
@@ -547,6 +596,23 @@ class AndroidToolboxWindow(QMainWindow):
     def _set_theme(self, mode: str) -> None:
         self.theme.set_mode(mode)
         self._write_log(f"[VIEW] 主题：{theme.MODE_LABELS[mode]}")
+
+    def _shortcut_target(self):
+        focus = QApplication.focusWidget()
+        if self._active_page_key == "output" or (focus is not None and self.task_panel.isAncestorOf(focus)):
+            return self.task_panel
+        return self.pages.currentWidget()
+
+    def page_shortcut(self, action: str) -> bool:
+        """Dispatch F5 (refresh) / Ctrl+F (search) to the focused panel or current page."""
+        target = self._shortcut_target()
+        handler = getattr(target, "focus_search" if action == "search" else "refresh_shortcut", None)
+        if callable(handler):
+            return bool(handler())
+        tools = getattr(target, "table_tools", None)
+        if tools is None:
+            return False
+        return tools.focus_search() if action == "search" else tools.refresh()
 
     def _select_page(self, key: str) -> None:
         self.navigation.setCurrentItem(self._nav_items[key])
@@ -666,6 +732,7 @@ class AndroidToolboxWindow(QMainWindow):
             self.android_version.setText("Android：未检测")
             for name in self.privilege_labels:
                 self._set_pill(name, f"{name}：未检测", "off")
+            self._set_facts({})
             self.remount_button.setEnabled(False)
             if self._device_serial:
                 self._write_log(f"[INFO] 当前设备：{self._device_serial} · {STATE_LABELS.get(state, state)}")
@@ -742,11 +809,14 @@ class AndroidToolboxWindow(QMainWindow):
         self.device_selector.clear()
         self.device_table.setRowCount(len(devices))
         for row, device in enumerate(devices):
-            self.device_selector.addItem(f"{device.serial} · {device.state}", device.serial)
+            self.device_selector.addItem(device_label(device), device.serial)
+            self.device_selector.setItemData(row, " · ".join(
+                value for value in (device.serial, device.model, device.product, device.transport) if value),
+                Qt.ItemDataRole.ToolTipRole)
             for col, value in enumerate((device.serial, device.state, device.model, device.product, device.device, device.transport)):
                 self.device_table.setItem(row, col, QTableWidgetItem(value))
         if placeholder is not None:
-            self.device_selector.addItem(f"{previous} · {STATE_LABELS[DISCONNECTED]}", previous)
+            self.device_selector.addItem(device_label(placeholder), previous)
         if not devices and placeholder is None:
             self.device_selector.addItem("未发现设备", "")
         index = self.device_selector.findData(previous) if previous else -1
@@ -776,18 +846,14 @@ class AndroidToolboxWindow(QMainWindow):
             QApplication.clipboard().setText(serial)
             self._write_log("[OK] 已复制 Serial：" + serial)
 
-    def _device_context_menu(self, position) -> None:
-        row = self.device_table.rowAt(position.y())
-        if row < 0:
-            return
-        self.device_table.selectRow(row)
-        menu = QMenu(self)
+    def _device_menu(self, menu: QMenu, row: int) -> None:
+        if self.device_table.currentRow() != row:
+            self.device_table.selectRow(row)
         menu.addAction("复制 Serial", self._copy_serial)
         menu.addAction("设为当前设备", self._select_highlighted)
         serial = self._highlighted_serial()
         action = menu.addAction("断开无线设备", lambda: self._disconnect_device(serial))
         action.setEnabled(":" in serial)
-        menu.exec(self.device_table.viewport().mapToGlobal(position))
 
     def _require_device(self, quiet: bool = False) -> bool:
         device = self._devices.get(self._device_serial)
@@ -810,6 +876,109 @@ class AndroidToolboxWindow(QMainWindow):
         self._run_adb("连接无线 ADB", ["connect", address], timeout=30,
                       callback=lambda task: self._refresh_devices() if task.status == "succeeded" else None)
 
+    def _ask_pairing(self, address: str = "") -> tuple[str, str] | None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("无线调试 · 配对码配对")
+        layout = QVBoxLayout(dialog)
+        note = QLabel("在设备的“开发者选项 → 无线调试 → 使用配对码配对设备”中查看 IP 地址和端口以及 6 位配对码。"
+                      "配对端口与连接端口不同；配对成功后还需连接无线调试页面显示的地址。")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        form = QFormLayout()
+        address_field = QLineEdit(address)
+        address_field.setPlaceholderText("例如 192.168.1.23:41913")
+        code_field = QLineEdit()
+        code_field.setPlaceholderText("6 位数字")
+        code_field.setMaxLength(6)
+        form.addRow("IP 地址和端口", address_field)
+        form.addRow("配对码", code_field)
+        layout.addLayout(form)
+        error = ui_kit.set_role(QLabel(""), "error")
+        error.setWordWrap(True)
+        error.hide()
+        layout.addWidget(error)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("配对")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        result: list[tuple[str, str]] = []
+
+        def accept() -> None:
+            try:
+                result.append(validate_pairing(address_field.text(), code_field.text()))
+            except ValueError as exc:
+                error.setText(str(exc))
+                error.show()
+                return
+            dialog.accept()
+
+        buttons.accepted.connect(accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        (code_field if address else address_field).setFocus()
+        dialog.exec()
+        dialog.deleteLater()
+        return result[0] if result else None
+
+    def _pair_wireless(self, address: str = "") -> None:
+        if self._runtime_error:
+            self._write_log("[ERROR] " + self._runtime_error)
+            return
+        answer = self._ask_pairing(address)
+        if answer is None:
+            return
+        address, code = answer
+        # The code is single-use and expires when the pairing dialog closes on the device.
+        self._run_adb("无线调试配对", ["pair", address, code], timeout=30,
+                      callback=lambda task, host=address.rsplit(":", 1)[0]: self._pair_finished(task, host))
+
+    def _pair_finished(self, task: Task, host: str) -> None:
+        output = (task.stdout + "\n" + task.stderr).strip()
+        if task.status == "succeeded" and "successfully paired" in output.lower():
+            self._write_log(f"[OK] 已与 {host} 配对。请连接无线调试页面显示的 IP 地址和端口（不是配对端口）。")
+            self.connection_note.setText("配对成功：填写无线调试页面显示的连接端口后点击「连接」，或使用「发现设备」。")
+            if not self.address_input.text().strip().startswith(host + ":"):
+                self.address_input.setText(host + ":")
+            self._focus_wireless()
+            self._refresh_devices()
+        else:
+            self.connection_note.setText("配对失败：请确认配对码和端口未过期，并查看任务输出。")
+            self._write_log("[WARN] 无线调试配对失败：" + (significant_stderr(task.stderr) or task.stdout).strip()[-300:])
+
+    def _discover_mdns(self) -> None:
+        if self._runtime_error:
+            self._write_log("[ERROR] " + self._runtime_error)
+            return
+        self.connection_note.setText("正在通过 mDNS 查找无线调试设备…")
+        self._run_adb("发现无线调试设备", ["mdns", "services"], timeout=15, callback=self._mdns_received)
+
+    def _choose_mdns_service(self, services: list[MdnsService]) -> MdnsService | None:
+        labels = [service.label for service in services]
+        label, accepted = QInputDialog.getItem(self, "发现的无线调试设备", "选择要配对或连接的服务", labels, 0, False)
+        return services[labels.index(label)] if accepted and label in labels else None
+
+    def _mdns_received(self, task: Task) -> None:
+        if task.status != "succeeded":
+            detail = (significant_stderr(task.stderr) or task.stdout).strip()
+            lowered = detail.lower()
+            unsupported = "unknown command" in lowered or ("mdns" in lowered and "not" in lowered)
+            self.connection_note.setText("当前 adb 不支持 mDNS 发现，请更新 platform-tools 或手动输入地址。" if unsupported
+                                         else "mDNS 发现失败，请查看任务输出。")
+            self._write_log("[WARN] mDNS 发现失败：" + detail[-300:])
+            return
+        services = parse_mdns_services(task.stdout)
+        if not services:
+            self.connection_note.setText("未发现无线调试设备：请确认电脑与设备在同一局域网，且已开启“无线调试”。")
+            return
+        self.connection_note.setText(f"发现 {len(services)} 个无线调试服务。")
+        service = self._choose_mdns_service(services)
+        if service is None:
+            return
+        if service.pairing:
+            self._pair_wireless(service.address)
+        else:
+            self.address_input.setText(service.address)
+            self._connect_wireless()
+
     def _disconnect_device(self, serial=None) -> None:
         serial = serial if isinstance(serial, str) else self._device_serial
         if ":" not in serial:
@@ -820,8 +989,7 @@ class AndroidToolboxWindow(QMainWindow):
     def _query_status(self, auto: bool = False) -> None:
         if not self._require_device(quiet=bool(auto)):
             return
-        script = "id -u; getprop ro.debuggable; getprop ro.build.version.release; cat /proc/mounts"
-        task = self._run_adb("检测设备特权状态", ["shell", script], self._device_serial,
+        task = self._run_adb("检测设备特权状态", ["shell", STATUS_SCRIPT], self._device_serial,
                              callback=self._status_received, transient=bool(auto))
         self._status_task_id = task.id
         self.android_version.setText("Android：正在检测…")
@@ -830,6 +998,7 @@ class AndroidToolboxWindow(QMainWindow):
         self.android_version.setText("Android：状态检测失败 · 点击「获取状态」重试")
         for name in self.privilege_labels:
             self._set_pill(name, f"{name}：检测失败", "warn")
+        self._set_facts({})
         self.remount_button.setEnabled(False)
         self._write_log(f"[WARN] 设备状态检测失败：{reason}")
 
@@ -841,19 +1010,28 @@ class AndroidToolboxWindow(QMainWindow):
             detail = (significant_stderr(task.stderr) or task.stdout).strip()[-300:]
             self._status_failed(f"{STATUS_LABELS.get(task.status, task.status)}" + (f" · {detail}" if detail else ""))
             return
-        lines = task.stdout.splitlines()
-        if len(lines) < 3:
-            self._status_failed("输出不完整，请查看任务输出")
+        try:
+            status = parse_device_status(task.stdout)
+        except ValueError as exc:
+            self._status_failed(str(exc))
             return
-        root = lines[0].strip() == "0"
+        root = status.root
         self._set_pill("Root", "Root：" + ("是" if root else "否"), "ok" if root else "off")
-        debuggable = lines[1].strip()
-        self._set_pill("Debuggable", "Debuggable：" + debuggable, "ok" if debuggable == "1" else "off")
-        writable = any(len(parts := line.split()) >= 4 and parts[1] in {"/", "/system", "/vendor"}
-                       and "rw" in parts[3].split(",") for line in lines[3:])
+        self._set_pill("Debuggable", "Debuggable：" + status.debuggable, "ok" if status.debuggable == "1" else "off")
+        writable = status.system_writable
         self._set_pill("Remount", "Remount：" + ("系统分区可写" if writable else "未见可写系统分区"), "ok" if writable else "off")
         self.remount_button.setEnabled(root)
-        self.android_version.setText("Android：" + lines[2].strip())
+        self.android_version.setText("Android：" + status.release)
+        self._set_facts({"battery": status.battery, "resolution": status.resolution, "abi": status.abi,
+                         "selinux": status.selinux, "ip": status.ip, "fingerprint": status.fingerprint},
+                        {"abi": status.abilist})
+
+    def _set_facts(self, values: dict[str, str], tooltips: dict[str, str] | None = None) -> None:
+        for key, label in self.device_facts.items():
+            value = values.get(key, "")
+            label.setText(f"{label.property('factTitle')}：{value or '—'}")
+            tip = (tooltips or {}).get(key, "")
+            label.setToolTip(f"全部 ABI：{tip}" if key == "abi" and tip else (value if key == "fingerprint" else ""))
 
     def _set_pill(self, name: str, text: str, state: str) -> None:
         label = self.privilege_labels[name]
@@ -1005,6 +1183,7 @@ class AndroidToolboxWindow(QMainWindow):
         self._settings.setValue("splitter", self.workspace_splitter.saveState())
         self._settings.setValue("dock_ratio", self._dock_ratio)
         self._settings.setValue("processes/columns", self.process_page.visible_columns())
+        self._settings.setValue("processes/interval", self.process_page.interval())
         self._settings.sync()
         if self._settings.status() != QSettings.Status.NoError:
             self._write_log("[ERROR] 无法保存工作区布局。")
@@ -1087,5 +1266,6 @@ class AndroidToolboxWindow(QMainWindow):
         self._auto_refresh_timer.stop()
         self._await_timer.stop()
         self.runner.flush_history()
+        self.scrcpy_page.save_config()
         self._save_workspace()
         event.accept()

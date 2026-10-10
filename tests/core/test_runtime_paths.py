@@ -26,8 +26,11 @@ def test_default_ignores_path_and_explicit_choice_configures_both(monkeypatch, t
     adb = tmp_path / "tool" / "scrcpy-win64-v5.0" / "adb.exe"
     adb.parent.mkdir(parents=True)
     adb.touch()
-    monkeypatch.delenv("ADB", raising=False)
-    monkeypatch.delenv("ADBUTILS_ADB_PATH", raising=False)
+    # setenv first so monkeypatch records (and later restores) the original state:
+    # configure_runtime() writes both variables directly into os.environ.
+    for name in ("ADB", "ADBUTILS_ADB_PATH"):
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
     monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(runtime_paths, "application_dir", lambda: tmp_path)
     configure_runtime()

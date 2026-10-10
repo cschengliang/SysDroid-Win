@@ -1,6 +1,11 @@
 import pytest
 
-from sysdroid.ui.pages.scrcpy_page import ScrcpyConfig, build_scrcpy_args, parse_encoder_list, validate_recording_path
+from datetime import datetime
+
+from sysdroid.ui.pages.scrcpy_page import (
+    ScrcpyConfig, ScrcpyPage, build_scrcpy_args, config_from_dict, config_to_dict, parse_encoder_list,
+    timestamped_recording_path, validate_recording_path,
+)
 
 
 def test_record_only_suppresses_control_and_display_but_preserves_literal_path():
@@ -75,3 +80,143 @@ def test_encoder_list_distinguishes_empty_audio_support_from_incomplete_output()
 def test_invalid_encoder_output_is_not_reported_as_supported_or_empty(output):
     with pytest.raises(ValueError):
         parse_encoder_list(output)
+
+
+def test_scrcpy5_display_and_device_options_use_documented_flags():
+    config = ScrcpyConfig(new_display=True, new_display_spec="1920x1080/420", crop="1224:1440:0:0",
+                          start_app="+?firefox", turn_screen_off=True, stay_awake=True,
+                          show_touches=True, keyboard_uhid=True)
+    args = build_scrcpy_args("serial", config)
+    for flag in ("--new-display=1920x1080/420", "--crop=1224:1440:0:0", "--start-app=+?firefox",
+                 "--turn-screen-off", "--stay-awake", "--show-touches", "--keyboard=uhid"):
+        assert flag in args
+    assert "--new-display" in build_scrcpy_args("serial", ScrcpyConfig(new_display=True))
+    assert "--display-id=2" in build_scrcpy_args("serial", ScrcpyConfig(display_id=2))
+    assert not any(arg.startswith("--display-id") for arg in build_scrcpy_args("serial", ScrcpyConfig()))
+
+
+def test_camera_source_rejects_display_only_options_and_skips_keyboard():
+    args = build_scrcpy_args("serial", ScrcpyConfig(video_source="camera", camera_facing="front", keyboard_uhid=True))
+    assert "--video-source=camera" in args and "--camera-facing=front" in args
+    assert "--keyboard=uhid" not in args
+    for bad in (dict(display_id=1), dict(new_display=True), dict(crop="100:100:0:0")):
+        with pytest.raises(ValueError, match="摄像头"):
+            build_scrcpy_args("serial", ScrcpyConfig(video_source="camera", **bad))
+    with pytest.raises(ValueError, match="显示屏 ID"):
+        build_scrcpy_args("serial", ScrcpyConfig(new_display=True, display_id=1))
+
+
+@pytest.mark.parametrize("field,value,message", [
+    ("crop", "100x100", "裁剪"), ("new_display_spec", "big", "虚拟显示屏"),
+    ("start_app", "?", "启动应用"), ("start_app", "pkg\nother", "启动应用"),
+])
+def test_invalid_scrcpy5_values_are_rejected(field, value, message):
+    config = ScrcpyConfig(new_display=field == "new_display_spec", **{field: value})
+    with pytest.raises(ValueError, match=message):
+        build_scrcpy_args("serial", config)
+
+
+def test_control_dependent_options_follow_scrcpy_control_rules():
+    options = dict(turn_screen_off=True, stay_awake=True, show_touches=True, start_app="com.example", keyboard_uhid=True)
+    no_control = build_scrcpy_args("serial", ScrcpyConfig(control_enabled=False, **options))
+    assert "--no-control" in no_control
+    assert not {"--turn-screen-off", "--stay-awake", "--show-touches", "--start-app=com.example", "--keyboard=uhid"}.intersection(no_control)
+    record_only = build_scrcpy_args("serial", ScrcpyConfig(record_enabled=True, record_mode="only", record_path="x.mp4", **options))
+    assert "--turn-screen-off" in record_only and "--start-app=com.example" in record_only
+    assert "--keyboard=uhid" not in record_only
+
+
+def test_config_round_trip_ignores_unknown_and_mistyped_values():
+    config = ScrcpyConfig(max_size=720, video_source="camera", camera_facing="front", stay_awake=True, crop="")
+    assert config_from_dict(config_to_dict(config)) == config
+    restored = config_from_dict({"max_size": "720", "audio_enabled": 1, "display_id": True, "unknown": 5, "start_app": "com.a"})
+    assert restored == ScrcpyConfig(start_app="com.a")
+    assert config_from_dict(["not", "a", "dict"]) == ScrcpyConfig()
+
+
+def test_timestamped_recording_path_adds_sanitized_serial_and_time(tmp_path):
+    now = datetime(2026, 10, 9, 21, 30, 5)
+    path = timestamped_recording_path(str(tmp_path / "screen.mkv"), "192.168.1.5:5555", now)
+    assert path == str(tmp_path / "screen-192.168.1.5_5555-20261009-213005.mkv")
+
+
+def test_page_persists_config_and_restores_it(runner, tmp_path):
+    config_path = tmp_path / "scrcpy.json"
+    page = ScrcpyPage(runner, config_path=config_path)
+    assert not config_path.exists()
+    page.max_size.setCurrentIndex(page.max_size.findData(720))
+    page.show_touches.setChecked(True)
+    page.start_app.setText("com.android.settings")
+    page.video_source.setCurrentIndex(page.video_source.findData("camera"))
+    assert page._save_timer.isActive()
+    assert page.save_config() and config_path.exists()
+    restored = ScrcpyPage(runner, config_path=config_path)
+    config = restored.current_config()
+    assert (config.max_size, config.show_touches, config.start_app, config.video_source) == (720, True, "com.android.settings", "camera")
+    assert restored.profile.currentData() == "custom"
+    assert not restored._save_timer.isActive()
+    config_path.write_text("{broken", encoding="utf-8")
+    assert ScrcpyPage(runner, config_path=config_path).current_config().max_size == 1080
+
+
+def test_start_session_uses_timestamped_recording_path(runner, tmp_path, monkeypatch):
+    page = ScrcpyPage(runner)
+    started = []
+
+    class FakeTask:
+        id, status, serial, exit_code, stdout, stderr = "t1", "running", "SER:1", None, "", ""
+
+    monkeypatch.setattr(page, "detect_tools", lambda: True)
+    monkeypatch.setattr(runner, "start_process", lambda title, program, args, **kw: started.append(args) or FakeTask())
+    page.now = lambda: datetime(2026, 1, 2, 3, 4, 5)
+    page.set_device("SER:1", "device", "Pixel")
+    page.record_enabled.setChecked(True)
+    page.record_path.setText(str(tmp_path / "cap.mp4"))
+    assert page.start_session() is not None
+    assert "--record=" + str(tmp_path / "cap-SER_1-20260102-030405.mp4") in started[0]
+    assert page.record_path.text() == str(tmp_path / "cap.mp4")
+
+
+def test_window_title_is_only_added_for_windowed_sessions():
+    assert "--window-title=Pixel · A" in build_scrcpy_args("A", ScrcpyConfig(), "Pixel · A")
+    record_only = ScrcpyConfig(record_enabled=True, record_mode="only", record_path="x.mp4")
+    assert not any(arg.startswith("--window-title") for arg in build_scrcpy_args("A", record_only, "Pixel · A"))
+
+
+def test_page_runs_one_session_per_device_concurrently(runner, monkeypatch):
+    from sysdroid.core.backend import Task
+    page = ScrcpyPage(runner)
+    started: list[Task] = []
+    cancelled: list[str] = []
+
+    def start_process(title, program, args, *, serial="", **kw):
+        task = Task(id=f"t{len(started) + 1}", title=title, program=program, args=args, serial=serial)
+        task.status = "running"
+        runner.tasks[task.id] = task
+        started.append(task)
+        return task
+
+    monkeypatch.setattr(page, "detect_tools", lambda: True)
+    monkeypatch.setattr(runner, "start_process", start_process)
+    monkeypatch.setattr(runner, "cancel", lambda task_id, force=False: cancelled.append(task_id))
+    page.set_device("A", "device", "Pixel")
+    first = page.start_session()
+    assert "--window-title=Pixel · A" in first.args
+    assert page.start_session() is None and "已有运行中" in page.error_label.text()
+    assert not page.start_button.isEnabled() and page.stop_button.isEnabled()
+    page.set_device("B", "device", "Galaxy")
+    assert page.start_button.isEnabled() and not page.stop_button.isEnabled()
+    assert page.status_label.text() == "未运行"
+    second = page.start_session()
+    assert page.running_sessions() == {"A": first.id, "B": second.id}
+    assert "A · " in page.sessions_label.text() and "B · " in page.sessions_label.text()
+    page.stop_session()
+    assert cancelled == [second.id]
+    first.status = "succeeded"
+    first.exit_code = 0
+    page._task_finished(first)
+    assert page.running_sessions() == {"B": second.id}
+    page.set_device("A", "device", "Pixel")
+    assert page.last_task_id == first.id and page.start_button.isEnabled()
+    page.stop_all_sessions()
+    assert cancelled == [second.id, second.id]

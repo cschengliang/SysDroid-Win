@@ -1,13 +1,29 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QSignalBlocker, QTimer, Qt
-from PySide6.QtGui import QTextCursor
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QLabel, QMessageBox,
-                               QHeaderView, QPlainTextEdit, QPushButton, QSplitter, QTabWidget, QTableWidget,
-                               QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtGui import QTextCursor, QTextDocument
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
+                               QLabel, QLineEdit, QMenu, QMessageBox, QHeaderView, QPlainTextEdit, QPushButton,
+                               QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from sysdroid.core.backend import OUTPUT_LIMIT, STATUS_LABELS, TERMINAL_STATUSES, Task, TaskRunner
 from sysdroid.ui import kit as ui_kit
+from sysdroid.ui.tables import TableTools
+
+# Status filter buckets: label -> statuses (None means all).
+STATUS_FILTERS: tuple[tuple[str, frozenset[str] | None], ...] = (
+    ("全部状态", None),
+    ("进行中", frozenset({"starting", "running", "stopping"})),
+    ("成功", frozenset({"succeeded"})),
+    ("失败 / 超时", frozenset({"failed", "timed_out"})),
+    ("已停止", frozenset({"cancelled"})),
+)
+KIND_FILTERS: tuple[tuple[str, str | None], ...] = (("全部类型", None), ("ADB 请求", "adb"), ("本地进程", "process"))
+_MINIMUM_WIDTHS = (144, 140, 76, 80, 60)
+
+
 class TaskPanel(QTabWidget):
     def __init__(self, runner: TaskRunner, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -28,16 +44,44 @@ class TaskPanel(QTabWidget):
         toolbar = QHBoxLayout()
         self.summary = ui_kit.set_role(QLabel("暂无活动任务"), "hint")
         toolbar.addWidget(self.summary, 1)
-        self.view_button = QPushButton("查看所选输出")
+        self.filter_search = QLineEdit()
+        self.filter_search.setObjectName("taskFilterSearch")
+        self.filter_search.setPlaceholderText("筛选命令 / 设备")
+        self.filter_search.setClearButtonEnabled(True)
+        self.filter_search.textChanged.connect(self._apply_filter)
+        toolbar.addWidget(self.filter_search)
+        self.status_filter = QComboBox()
+        self.status_filter.setObjectName("taskStatusFilter")
+        for label, _statuses in STATUS_FILTERS:
+            self.status_filter.addItem(label)
+        self.status_filter.currentIndexChanged.connect(self._apply_filter)
+        toolbar.addWidget(self.status_filter)
+        self.kind_filter = QComboBox()
+        self.kind_filter.setObjectName("taskKindFilter")
+        for label, _kind in KIND_FILTERS:
+            self.kind_filter.addItem(label)
+        self.kind_filter.currentIndexChanged.connect(self._apply_filter)
+        toolbar.addWidget(self.kind_filter)
+        self.view_button = QPushButton("查看输出")
         self.view_button.clicked.connect(lambda: self.show_task(self.selected_id))
         toolbar.addWidget(self.view_button)
+        self.row_stop_button = QPushButton("停止")
+        self.row_stop_button.setObjectName("taskRowStop")
+        self.row_stop_button.clicked.connect(lambda: self.runner.cancel(self.selected_id))
+        toolbar.addWidget(self.row_stop_button)
+        self.row_kill_button = QPushButton("强制结束")
+        self.row_kill_button.setObjectName("taskRowKill")
+        self.row_kill_button.setProperty("force-stop", True)
+        self.row_kill_button.clicked.connect(lambda: self._force_stop(self.selected_id))
+        toolbar.addWidget(self.row_kill_button)
         clear = QPushButton("清除已结束")
         clear.clicked.connect(self._clear_finished)
         toolbar.addWidget(clear)
         tasks_layout.addLayout(toolbar)
-        self.table = QTableWidget(0, 6)
+        # Plain items only: per-row button widgets were the panel's main cost.
+        self.table = QTableWidget(0, 5)
         self.table.setObjectName("taskTable")
-        self.table.setHorizontalHeaderLabels(["命令", "设备", "状态", "已运行", "退出码", "操作"])
+        self.table.setHorizontalHeaderLabels(["命令", "设备", "状态", "已运行", "退出码"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -46,12 +90,14 @@ class TaskPanel(QTabWidget):
         header.setMinimumSectionSize(48)
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column, width in ((1, 140), (2, 76), (3, 80), (4, 60), (5, 160)):
+        for column, width in ((1, 140), (2, 76), (3, 80), (4, 60)):
             self.table.setColumnWidth(column, width)
         self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         header.sectionResized.connect(self._enforce_column_width)
         self.table.itemSelectionChanged.connect(self._select_row)
         self.table.cellDoubleClicked.connect(lambda row, col: self.show_task(self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)))
+        self.table_tools = TableTools(self.table, export_name="tasks", menu=self._row_menu,
+                                      search=self.filter_search)
         tasks_layout.addWidget(self.table)
         ui_kit.install_empty_state(self.table, lambda: "暂无任务\n执行命令、刷新设备或启动投屏后会显示在这里")
         self.addTab(tasks_page, "活动任务")
@@ -67,9 +113,35 @@ class TaskPanel(QTabWidget):
         self.kill_button.clicked.connect(lambda: self._force_stop(self.selected_id))
         self.copy_button = QPushButton("复制输出")
         self.copy_button.clicked.connect(self._copy)
-        for button in (self.stop_button, self.kill_button, self.copy_button):
+        self.save_button = QPushButton("保存到文件…")
+        self.save_button.setObjectName("taskSaveOutput")
+        self.save_button.clicked.connect(lambda: self.save_output())
+        for button in (self.stop_button, self.kill_button, self.copy_button, self.save_button):
             output_toolbar.addWidget(button)
         output_layout.addLayout(output_toolbar)
+        find_row = QHBoxLayout()
+        self.output_search = QLineEdit()
+        self.output_search.setObjectName("taskOutputSearch")
+        self.output_search.setPlaceholderText("在输出中查找（Enter 下一个，Shift+Enter 上一个）")
+        self.output_search.setClearButtonEnabled(True)
+        self.output_search.returnPressed.connect(lambda: self.find_output(backward=bool(
+            QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)))
+        self.output_search.textChanged.connect(lambda: self.find_output(restart=True))
+        find_row.addWidget(self.output_search, 1)
+        self.find_prev_button = QPushButton("上一个")
+        self.find_prev_button.clicked.connect(lambda: self.find_output(backward=True))
+        find_row.addWidget(self.find_prev_button)
+        self.find_next_button = QPushButton("下一个")
+        self.find_next_button.clicked.connect(lambda: self.find_output())
+        find_row.addWidget(self.find_next_button)
+        self.find_label = ui_kit.set_role(QLabel(""), "hint")
+        self.find_label.setObjectName("taskFindStatus")
+        find_row.addWidget(self.find_label)
+        self.wrap_toggle = QCheckBox("自动换行")
+        self.wrap_toggle.setObjectName("taskWrap")
+        self.wrap_toggle.toggled.connect(self._set_wrap)
+        find_row.addWidget(self.wrap_toggle)
+        output_layout.addLayout(find_row)
         self.command = QLabel()
         self.command.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.command.setWordWrap(True)
@@ -84,6 +156,7 @@ class TaskPanel(QTabWidget):
             editor.setObjectName("task" + stream.capitalize())
             editor.setReadOnly(True)
             editor.setMaximumBlockCount(5000)
+            editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
             setattr(self, stream, editor)
             layout.addWidget(editor)
             splitter.addWidget(pane)
@@ -109,18 +182,6 @@ class TaskPanel(QTabWidget):
         for col in range(5):
             self.table.setItem(row, col, QTableWidgetItem())
         self.table.item(row, 0).setData(Qt.ItemDataRole.UserRole, task.id)
-        controls = QWidget()
-        layout = QHBoxLayout(controls)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(3)
-        for label, callback in (("输出", lambda: self.show_task(task.id)),
-                                ("停止", lambda: self.runner.cancel(task.id)),
-                                ("强杀", lambda: self._force_stop(task.id))):
-            button = QPushButton(label)
-            button.setProperty("force-stop", label == "强杀")
-            button.clicked.connect(callback)
-            layout.addWidget(button)
-        self.table.setCellWidget(row, 5, controls)
         self._update_task(task)
         if not self.selected_id and not task.transient:
             self.table.selectRow(row)
@@ -138,10 +199,7 @@ class TaskPanel(QTabWidget):
                         item.setText(text)
                     item.setToolTip(text)
             self.table.item(row, 0).setToolTip(task.command)
-            controls = self.table.cellWidget(row, 5).findChildren(QPushButton)
-            for button in controls[1:]:
-                force_stop = bool(button.property("force-stop"))
-                button.setEnabled(task.status not in TERMINAL_STATUSES and not (force_stop and task.kind == "adb"))
+            self._filter_row(row, task)
         if task.id == self.selected_id:
             self._update_controls()
         self._update_summary()
@@ -186,7 +244,10 @@ class TaskPanel(QTabWidget):
         active = bool(task and task.status not in TERMINAL_STATUSES)
         self.stop_button.setEnabled(active)
         self.kill_button.setEnabled(active and task is not None and task.kind != "adb")
+        self.row_stop_button.setEnabled(active)
+        self.row_kill_button.setEnabled(active and task is not None and task.kind != "adb")
         self.copy_button.setEnabled(task is not None)
+        self.save_button.setEnabled(task is not None)
         self.view_button.setEnabled(task is not None)
         if task:
             self.info.setText(f"{task.title} · {task.serial or 'ADB Server'} · {STATUS_LABELS[task.status]} · "
@@ -271,7 +332,7 @@ class TaskPanel(QTabWidget):
                 self.output_splitter.setOrientation(orientation)
 
     def _enforce_column_width(self, column: int, _old: int, width: int) -> None:
-        minimum = (144, 140, 76, 80, 60, 160)[column]
+        minimum = _MINIMUM_WIDTHS[column]
         if width < minimum:
             self.table.horizontalHeader().resizeSection(column, minimum)
 
@@ -348,3 +409,115 @@ class TaskPanel(QTabWidget):
                 self.table.setCurrentCell(-1, -1)
         self._update_controls()
         self._update_summary()
+
+    # -- filters ------------------------------------------------------------
+    def _matches(self, task: Task) -> bool:
+        statuses = STATUS_FILTERS[max(0, self.status_filter.currentIndex())][1]
+        kind = KIND_FILTERS[max(0, self.kind_filter.currentIndex())][1]
+        if statuses is not None and task.status not in statuses:
+            return False
+        if kind is not None and (task.kind == "adb") != (kind == "adb"):
+            return False
+        query = self.filter_search.text().strip().casefold()
+        return not query or query in f"{task.title}\n{task.serial or 'ADB Server'}\n{task.command}".casefold()
+
+    def _filter_row(self, row: int, task: Task) -> None:
+        hidden = not self._matches(task)
+        if self.table.isRowHidden(row) != hidden:
+            self.table.setRowHidden(row, hidden)
+
+    def _apply_filter(self, *_args) -> None:
+        for task_id, row in self._rows.items():
+            task = self.runner.get_task(task_id)
+            if task is not None:
+                self._filter_row(row, task)
+        visible = sum(not self.table.isRowHidden(row) for row in range(self.table.rowCount()))
+        self.table.setToolTip("" if visible == self.table.rowCount() else
+                              f"筛选后显示 {visible} / {self.table.rowCount()} 条")
+
+    def _row_menu(self, menu: QMenu, row: int) -> None:
+        item = self.table.item(row, 0)
+        task = self.runner.get_task(item.data(Qt.ItemDataRole.UserRole)) if item is not None else None
+        if task is None:
+            return
+        if self.selected_id != task.id:
+            self.table.selectRow(row)
+        active = task.status not in TERMINAL_STATUSES
+        menu.addAction("查看输出", lambda: self.show_task(task.id))
+        menu.addAction("停止", lambda: self.runner.cancel(task.id)).setEnabled(active)
+        menu.addAction("强制结束…", lambda: self._force_stop(task.id)).setEnabled(active and task.kind != "adb")
+        menu.addAction("复制命令", lambda: QApplication.clipboard().setText(task.command))
+
+    # -- output tools -------------------------------------------------------
+    def focus_search(self) -> bool:
+        """Ctrl+F: output search on the output tab, otherwise the task filter."""
+        field = self.output_search if self.currentIndex() == 1 else self.filter_search
+        field.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        field.selectAll()
+        return True
+
+    def _set_wrap(self, wrap: bool) -> None:
+        mode = QPlainTextEdit.LineWrapMode.WidgetWidth if wrap else QPlainTextEdit.LineWrapMode.NoWrap
+        for editor in (self.stdout, self.stderr):
+            editor.setLineWrapMode(mode)
+
+    def find_output(self, *, backward: bool = False, restart: bool = False) -> bool:
+        """Find the query in stdout, then stderr, wrapping around; highlights via selection."""
+        query = self.output_search.text()
+        editors = [self.stdout, self.stderr]
+        if not query:
+            for editor in editors:
+                cursor = editor.textCursor()
+                cursor.clearSelection()
+                editor.setTextCursor(cursor)
+            self.find_label.setText("")
+            return False
+        self._flush_output()
+        flags = QTextDocument.FindFlag.FindBackward if backward else QTextDocument.FindFlag(0)
+        focused = self.stderr if self.stderr.hasFocus() or getattr(self, "_find_in", None) is self.stderr else self.stdout
+        order = [focused, *[editor for editor in editors if editor is not focused]]
+        if backward:
+            order = [focused, *reversed([editor for editor in editors if editor is not focused])]
+        for index, editor in enumerate(order):
+            if restart or index > 0:
+                cursor = editor.textCursor()
+                cursor.movePosition(QTextCursor.MoveOperation.End if backward else QTextCursor.MoveOperation.Start)
+                editor.setTextCursor(cursor)
+            if editor.find(query, flags):
+                self._find_in = editor
+                total = sum(editor_text.count(query) for editor_text in
+                            (self.stdout.toPlainText(), self.stderr.toPlainText()))
+                self.find_label.setText(f"共 {total} 处 · {'stderr' if editor is self.stderr else 'stdout'}")
+                return True
+        # Wrap around within the first editor.
+        cursor = focused.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End if backward else QTextCursor.MoveOperation.Start)
+        focused.setTextCursor(cursor)
+        if focused.find(query, flags):
+            self._find_in = focused
+            self.find_label.setText("已从头继续")
+            return True
+        self.find_label.setText("未找到")
+        return False
+
+    def output_text(self, task: Task) -> str:
+        return (f"# {task.title}\n# 设备：{task.serial or 'ADB Server'} · 状态：{STATUS_LABELS[task.status]} · "
+                f"退出码：{'—' if task.exit_code is None else task.exit_code}\n# 命令：{task.command}\n\n"
+                f"## stdout\n{task.stdout}\n\n## stderr\n{task.stderr}\n")
+
+    def save_output(self, path: str | None = None) -> str:
+        task = self.runner.get_task(self.selected_id)
+        if task is None:
+            return ""
+        if path is None:
+            safe = "".join(character if character.isalnum() or character in "-_." else "_" for character in task.title)
+            path, _ = QFileDialog.getSaveFileName(self, "保存任务输出", str(Path.home() / f"{safe[:60] or 'task'}.txt"),
+                                                  "文本文件 (*.txt *.log);;所有文件 (*)")
+            if not path:
+                return ""
+        try:
+            Path(path).write_text(self.output_text(task), encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.warning(self, "保存失败", f"无法保存任务输出：{exc}")
+            return ""
+        return path

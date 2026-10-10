@@ -4,6 +4,7 @@ import os
 import re
 import shlex
 import secrets
+import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Iterator
 
 from PySide6.QtCore import QObject, Signal
 from sysdroid.core.backend import Task, TaskRunner
+from sysdroid.core.processes import _frame as parse_frame
 
 _PACKAGE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
 _DIAGNOSTIC = re.compile(
@@ -207,8 +209,50 @@ def parse_package_dump(output: str, package: str, user_id: int) -> PackageDetail
         boolean("suspended"), permissions="\n\n".join(sections), components=components, raw=output)
 
 
+_LIST_SECTIONS = ("members", "system", "disabled", "enriched")
+_USER_UNSUPPORTED = re.compile(
+    r"(?:unknown|unsupported|not supported|unrecognized|invalid).*--user|--user.*(?:unknown|unsupported|not supported|unrecognized|invalid)", re.I)
+_PERCENT = re.compile(r"\[\s*(\d{1,3})%\]")
+
+
+def list_script(nonce: str, user_id: int, options: list[str]) -> str:
+    """One shell round trip for every ``pm list`` query of a refresh."""
+    user = str(user_id)
+    commands = [
+        ("members", ["pm", "list", "packages", "--user", user]),
+        ("system", ["pm", "list", "packages", "--user", user, "-s"]),
+        ("disabled", ["pm", "list", "packages", "--user", user, "-d"]),
+    ]
+    if options:
+        commands.append(("enriched", ["pm", "list", "packages", "--user", user, *options]))
+    lines = [f"nonce={shlex.quote(nonce)}", r"""printf 'FRAME %s\n' "$nonce" """.strip()]
+    for name, tokens in commands:
+        lines.append(rf"""printf 'BEGIN %s %s\n' "$nonce" {name}; {shlex.join(tokens)}; rc=$?; """
+                     rf"""printf '\nEND %s %s %s\n' "$nonce" {name} "$rc" """.strip())
+    lines.append(r"""printf 'DONE %s\n' "$nonce" """.strip())
+    return "\n".join(lines) + "\n"
+
+
+def parse_list_batch(output: str, nonce: str) -> dict[str, str]:
+    sections = parse_frame(output, nonce)
+    if not {"members", "system", "disabled"} <= sections.keys() or not set(sections) <= set(_LIST_SECTIONS):
+        raise ValueError("包列表批量输出缺少或包含未识别的段")
+    for name, section in sections.items():
+        if section.rc != 0 or _DIAGNOSTIC.search(section.text):
+            raise ValueError(f"pm list（{name}）失败：返回码 {section.rc}\n{section.text}")
+    return {name: section.text for name, section in sections.items()}
+
+
+def install_progress(text: str) -> int | None:
+    """Last ``[ NN%]`` percentage printed by adb install, if any."""
+    matches = _PERCENT.findall(text)
+    return min(100, int(matches[-1])) if matches else None
+
+
 class PackageController(QObject):
     changed = Signal()
+    # Live adb install output: (latest line, percent or -1 when unknown).
+    install_progress = Signal(str, int)
 
     def __init__(self, runner: TaskRunner, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -225,7 +269,11 @@ class PackageController(QObject):
         self._flow: Iterator | None = None
         self._help: str | None = None
         self._submitting = False
+        self._install_output = ""
         runner.task_finished.connect(self._finished)
+        task_output = getattr(runner, "task_output", None)
+        if task_output is not None:
+            task_output.connect(self._output)
 
     @property
     def busy(self) -> bool:
@@ -266,7 +314,7 @@ class PackageController(QObject):
     def _shell(self, tokens: list[str], timeout: int = 15):
         task = yield (["shell", shlex.join(tokens)], timeout)
         diagnostic = task.stdout + "\n" + task.stderr
-        if re.search(r"(?:unknown|unsupported|not supported|unrecognized|invalid).*--user|--user.*(?:unknown|unsupported|not supported|unrecognized|invalid)", diagnostic, re.I):
+        if _USER_UNSUPPORTED.search(diagnostic):
             self.unsupported_actions.add(tokens[2] if tokens[0] == "cmd" else tokens[1])
         if task.status != "succeeded" or task.exit_code != 0 or _DIAGNOSTIC.search(task.stdout + "\n" + task.stderr):
             raise ValueError(f"设备请求失败：{task.status} / {task.exit_code}\n{task.stdout}\n{task.stderr}")
@@ -311,17 +359,34 @@ class PackageController(QObject):
         if self._flow is not None and task.id == self.task_id:
             self._advance(task)
 
+    def _output(self, task_id: str, stream: str, text: str) -> None:
+        if task_id != self.task_id or self.status != "安装 APK":
+            return
+        self._install_output = (self._install_output + text)[-4096:]
+        lines = [line.strip() for line in re.split(r"[\r\n]+", self._install_output) if line.strip()]
+        percent = install_progress(self._install_output)
+        self.install_progress.emit(lines[-1] if lines else "", -1 if percent is None else percent)
+
     def _lists(self):
-        u = str(self.user_id)
         if self._help is None:
+            # Cached per device: later refreshes are a single round trip.
             self._help = yield from self._shell(["pm", "help"])
-        members = parse_package_list((yield from self._shell(["pm", "list", "packages", "--user", u])))
-        systems = parse_package_list((yield from self._shell(["pm", "list", "packages", "--user", u, "-s"])))
-        disabled = parse_package_list((yield from self._shell(["pm", "list", "packages", "--user", u, "-d"])))
         options = [flag for flag in ("-f", "-i", "-U", "--show-versioncode")
                    if re.search(r"(?<![\w-])" + re.escape(flag) + r"(?![\w-])", self._help)]
+        nonce = uuid.uuid4().hex
+        task = yield (["shell", shlex.join(["sh", "-c", list_script(nonce, self.user_id, options)])], 30)
+        if _USER_UNSUPPORTED.search(task.stdout + "\n" + task.stderr):
+            self.unsupported_actions.add("list")
+        if task.status != "succeeded" or task.exit_code != 0 or _DIAGNOSTIC.search(task.stderr):
+            raise ValueError(f"设备请求失败：{task.status} / {task.exit_code}\n{task.stdout}\n{task.stderr}")
+        texts = parse_list_batch(task.stdout, nonce)
+        members = parse_package_list(texts["members"])
+        systems = parse_package_list(texts["system"])
+        disabled = parse_package_list(texts["disabled"])
         if options:
-            enriched = parse_package_list((yield from self._shell(["pm", "list", "packages", "--user", u, *options])))
+            if "enriched" not in texts:
+                raise ValueError("包列表批量输出缺少详细字段段")
+            enriched = parse_package_list(texts["enriched"])
             if set(enriched) != set(members):
                 raise ValueError("包成员在查询期间变化；保留旧快照")
             members = enriched
@@ -360,8 +425,9 @@ class PackageController(QObject):
             args.append("-r" if replace else "-R")
             if allow_test:
                 args.append("-t")
-            task = yield (args + files, 120)
-            if re.search(r"(?:unknown|unsupported|not supported|unrecognized|invalid).*--user|--user.*(?:unknown|unsupported|not supported|unrecognized|invalid)", task.stdout + task.stderr, re.I):
+            self._install_output = ""
+            task = yield (args + files, 300)
+            if _USER_UNSUPPORTED.search(task.stdout + task.stderr):
                 self.unsupported_actions.add("install")
             if task.status != "succeeded" or task.exit_code != 0 or _DIAGNOSTIC.search(task.stdout + task.stderr) or not re.search(r"(?m)^Success\s*$", task.stdout):
                 raise ValueError(f"安装失败（没有卸载或重试）：{task.status} / {task.exit_code}\n{task.stdout}\n{task.stderr}")
