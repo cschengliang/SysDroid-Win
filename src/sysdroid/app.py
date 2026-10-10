@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication, QStyleFactory
 from sysdroid.app_info import APP_NAME, APP_USER_MODEL_ID
 from sysdroid.runtime_paths import configure_runtime
 from sysdroid.ui import theme
-from sysdroid.ui.main_window import AndroidToolboxWindow
+from sysdroid.ui.main_window import SysDroidWindow
 
 
 def set_app_user_model_id(shell32: object | None = None) -> bool:
@@ -42,7 +42,7 @@ def main() -> int:
         configure_runtime()
     except ValueError as exc:
         runtime_error = str(exc)
-    window = AndroidToolboxWindow(runtime_error)
+    window = SysDroidWindow(runtime_error)
     window.show()
     return app.exec()
 

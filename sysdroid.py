@@ -1,6 +1,6 @@
 """Source launcher for SysDroid.
 
-Kept at the repository root so start_android_toolbox.bat, the README commands and the
+Kept at the repository root so start_sysdroid.bat, the README commands and the
 PyInstaller spec keep a stable entry point; the application lives in src/sysdroid.
 """
 import sys

@@ -47,7 +47,7 @@ for category, filename in (
 # Keep the contributed adbutils hook and the normal Qt/Pillow/certifi hooks.
 # No collect_all(), QML tree, development scripts, tests, or Qt Addons are bundled.
 a = Analysis(
-    [str(source_root / "android_toolbox.py")],
+    [str(source_root / "sysdroid.py")],
     pathex=[str(stdlib), str(source_root / "src"), str(source_root)],
     binaries=binaries,
     datas=datas,

@@ -29,7 +29,7 @@ def window(qapp, qtbot, monkeypatch, tmp_path):
         return task
 
     monkeypatch.setattr(backend.TaskRunner, "start_adb", start_adb)
-    instance = main_window_module.AndroidToolboxWindow()
+    instance = main_window_module.SysDroidWindow()
     qtbot.addWidget(instance)
     instance.started = started
     yield instance

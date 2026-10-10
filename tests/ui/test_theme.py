@@ -78,20 +78,20 @@ def test_roles_info_notes_and_empty_state_text(qapp):
 def test_main_window_brand_pages_theme_and_dock(clean_theme, monkeypatch, tmp_path):
     from sysdroid.core import backend as android_backend
     from sysdroid.core import commands as android_commands
-    from sysdroid.ui import main_window as android_toolbox
-    for module in (android_backend, android_commands, android_toolbox):
+    from sysdroid.ui import main_window as main_window_module
+    for module in (android_backend, android_commands, main_window_module):
         monkeypatch.setattr(module, "DATA_DIR", tmp_path)
     # A runtime error keeps the window from starting real ADB processes.
-    window = android_toolbox.AndroidToolboxWindow("test runtime: adb disabled")
+    window = main_window_module.SysDroidWindow("test runtime: adb disabled")
     try:
-        assert window.windowTitle().startswith(android_toolbox.APP_NAME)
+        assert window.windowTitle().startswith(main_window_module.APP_NAME)
         assert not window.windowIcon().isNull()
         for key, (title, description) in window.PAGE_INFO.items():
             window._select_page(key)
             assert window.page_title.text() == title and window.page_subtitle.text() == description
         assert window.bottom_stack.currentWidget() is window.task_panel  # output page
         window._select_page("home")
-        window._set_dock_view(android_toolbox.DOCK_LOG, remember=True)
+        window._set_dock_view(main_window_module.DOCK_LOG, remember=True)
         assert window.bottom_stack.currentWidget() is window.log_panel
         window._select_page("props")
         assert window.bottom_stack.currentWidget() is window.log_panel
@@ -104,7 +104,7 @@ def test_main_window_brand_pages_theme_and_dock(clean_theme, monkeypatch, tmp_pa
         assert window._theme_actions["dark"].isChecked()
         settings = QSettings(str(tmp_path / "workspace.ini"), QSettings.Format.IniFormat)
         assert settings.value("ui/theme") == "dark"
-        assert int(settings.value("ui/dock_view")) == android_toolbox.DOCK_LOG
+        assert int(settings.value("ui/dock_view")) == main_window_module.DOCK_LOG
         ui_states = {window.connected.property("state")}
         assert ui_states == {"off"}
     finally:

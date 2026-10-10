@@ -348,7 +348,7 @@ def validate_stdlib_analysis(analysis, source_root: Path, stage: Path, stdlib: P
         path = Path(source).resolve()
         approved = _beneath(path, EMBEDDED_ROOT) or _beneath(path, stage)
         app_root = source_root / "src" / "sysdroid"
-        approved = approved or path == source_root / "android_toolbox.py"
+        approved = approved or path == source_root / "sysdroid.py"
         approved = approved or (_beneath(path, app_root) and path.suffix == ".py")
         if not approved:
             raise BuildError(f"Analysis collected a file outside approved embedded/application inputs: {name}: {path} ({kind})")
