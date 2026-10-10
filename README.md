@@ -1,286 +1,133 @@
-# pygui
+<div align="center">
 
-一个基于 Windows 嵌入式 Python 3.14.8 的 Python 环境。
+<img src="assets/icons/sysdroid-256.png" width="128" height="128" alt="SysDroid 图标">
 
-## 使用
+# SysDroid
 
-在项目根目录执行：
+**面向 Android 系统开发与调试的 Windows 桌面工具箱**
+
+*An Android system development toolbox for Windows — ADB, props, settings, APKs, processes and scrcpy in one window.*
+
+[![Build](https://github.com/cschengliang/SysDroid-Win/actions/workflows/build.yml/badge.svg)](https://github.com/cschengliang/SysDroid-Win/actions/workflows/build.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078D6?logo=windows)
+![Python](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)
+![PySide6](https://img.shields.io/badge/GUI-PySide6%20(Qt%206)-41CD52?logo=qt&logoColor=white)
+
+</div>
+
+![SysDroid 应用包信息页](docs/screenshots/apks.png)
+
+SysDroid 把日常 Android 系统开发中反复敲的 ADB 命令做成了一个原生 Windows 程序：连接设备、查看与修改系统属性和 Settings、管理 APK、监控进程、启动 Scrcpy 投屏录屏，所有操作都执行真实命令，输出与退出码随时可查。便携版自带 ADB、Scrcpy 5.0 和 Windows Terminal，解压即用。
+
+## 功能
+
+**设备连接**
+- 实时跟踪设备插拔与状态变化，顶部全局设备选择器在各页面间同步
+- 设备卡片：型号、Android 版本、电量、分辨率、ABI、SELinux、IP、构建指纹及 Root / Remount / Debuggable 状态（一次 `adb shell` 批量读取）
+- 无线调试：IP 直连、配对码配对（`adb pair`）、mDNS 发现设备（`adb mdns services`）
+- Root、Remount、重启到系统 / Recovery / Bootloader（均需确认）；一键在内置 Windows Terminal 中打开 `adb shell`
+
+**ADB 命令库**
+- 参数化命令模板（`{变量}`）与 PowerShell 命令预览，支持分类、收藏、执行类型筛选
+- 自动填入上次使用的参数；无参数的简单命令可“直接执行”
+- 工作流：把多条命令串成步骤顺序执行，任一步失败即停止
+- 命令与工作流导入 / 导出 JSON，执行历史可回看输出
+
+**系统属性**
+- `getprop` 全量列表，按名称 / 值搜索、按 `ro.*` / `persist.*` 前缀筛选
+- `setprop` 写入前确认、写入后读回校验
+- 快照对比：记录或加载基线，列出新增 / 删除 / 变化的属性并导出 CSV
+
+**系统设置**
+- 按 Android 用户读取 `system` / `secure` / `global` 的全部名称与值
+- 新增、修改、删除前确认，提交后逐项读回核对
+- 常用预设：动画缩放、显示触摸操作、指针位置、充电时保持唤醒
+
+**应用包信息**
+- 按用户列出包名、UID、版本、系统 / 第三方、启用状态与安装来源；双击查看版本、SDK、权限、组件和 APK 路径
+- 安装 APK：多选或拖放，支持 split（`install-multiple`），实时显示进度，可取消
+- 启动、强行停止、启用 / 禁用、卸载，导出 APK（base + split）
+
+**进程监控**
+- 按 1–10 秒间隔采样 CPU%、RSS、VSS、Swap、线程数、运行时长等，列可自选
+- 进程详情：完整 cmdline、PSS / SwapPss、ActivityManager 启动记录
+- 结束进程（SIGTERM / SIGKILL）或强行停止应用，发送前复核 PID 防止误杀复用进程
+
+**投屏与录屏**
+- 自带 Scrcpy 5.0，以独立窗口投屏；画质预设、视频 / 音频编码与码率、键鼠控制、窗口选项
+- 录制 MP4 / MKV，文件名自动带设备 Serial 与时间戳
+- Scrcpy 5.0 选项：摄像头画面、新建虚拟显示屏、指定显示屏、裁剪、启动应用、关闭屏幕、保持唤醒、显示触摸点、UHID 键盘
+- 每台设备一个会话，多台设备可同时投屏；配置自动保存
+
+**任务输出与通用体验**
+- 所有命令流式显示 stdout / stderr，保留真实状态、耗时与退出码，可停止、强制结束、查找、保存
+- 表格统一交互：右键菜单、`Ctrl+C` 复制行、导出 CSV、`F5` 刷新、`Ctrl+F` 搜索
+- 浅色 / 深色 / 跟随系统主题，Windows 11 原生样式
+
+## 截图
+
+| | |
+| :---: | :---: |
+| ![设备连接](docs/screenshots/home.png)<br>设备连接 | ![ADB 命令库](docs/screenshots/commands.png)<br>ADB 命令库 |
+| ![系统属性](docs/screenshots/props.png)<br>系统属性 | ![系统设置](docs/screenshots/settings.png)<br>系统设置 |
+| ![应用包信息](docs/screenshots/apks.png)<br>应用包信息 | ![进程监控](docs/screenshots/processes.png)<br>进程监控 |
+| ![投屏与录屏](docs/screenshots/scrcpy.png)<br>投屏与录屏 | ![任务输出](docs/screenshots/task-output.png)<br>任务输出 |
+| ![深色主题 · 设备连接](docs/screenshots/home-dark.png)<br>深色主题 · 设备连接 | ![深色主题 · 进程监控](docs/screenshots/processes-dark.png)<br>深色主题 · 进程监控 |
+
+截图使用 Android 16 SDK 平板模拟器拍摄。
+
+## 下载与使用
+
+1. 从 [Releases](https://github.com/cschengliang/SysDroid-Win/releases) 下载最新的 `SysDroid-win-x64-<版本>.zip`；想试用未发布的版本，可在 [Actions](https://github.com/cschengliang/SysDroid-Win/actions/workflows/build.yml) 的构建记录中下载 Artifact。
+2. 解压到任意目录（路径可含中文和空格），双击 `SysDroid.exe`。请保留完整目录，不要只复制 EXE 或删除 `_internal`、`tool`、`licenses`。
+3. 在手机或平板上开启“开发者选项 → USB 调试”（无线调试需 Android 11+），用 USB 连接后在设备上允许调试授权。
+
+- 不需要安装 Python、Qt、ADB 或 Scrcpy。面向 Windows 10 / 11 x64（主要在 Windows 11 上测试）；USB 驱动需自行安装。
+- 用户数据（命令库、历史、Scrcpy 配置、窗口布局）保存在 `%LOCALAPPDATA%\SysDroid`，可用环境变量 `SYSDROID_DATA_DIR` 改到其他目录。从旧版升级时，首次启动会把 `%LOCALAPPDATA%\AndroidToolbox` 中的数据复制过来，旧目录保持不变。
+
+## 从源码运行 / 构建
+
+`lib/`（嵌入式 Python 3.14.8）和 `tool/`（Scrcpy、Windows Terminal）不在 git 中，克隆后请先按 [DEPENDENCIES.md](DEPENDENCIES.md) 补齐。
 
 ```bat
-lib\python-3.14.8-embed-amd64\python.exe your_script.py
-```
-
-## 安装依赖
-
-> `lib/`（嵌入式 Python）和 `tool/`（Scrcpy、Windows Terminal）不在 git 中。克隆仓库后，请先按 [依赖说明（DEPENDENCIES.md）](DEPENDENCIES.md) 补齐环境。只想使用软件的话，请直接从 [Releases](https://github.com/cschengliang/SysDroid-Win/releases) 下载便携版。
-
-pip 已配置为使用清华 PyPI 镜像：
-
-```bat
-lib\python-3.14.8-embed-amd64\python.exe -m pip install 包名
-```
-
-桌面程序依赖 `PySide6` 和 `adbutils`；Python 标准库不包含 ADB 客户端：
-
-```bat
+:: 安装依赖
 lib\python-3.14.8-embed-amd64\python.exe -m pip install -r requirements.txt
-```
 
-查看 Python 和 pip 版本：
-
-```bat
-lib\python-3.14.8-embed-amd64\python.exe --version
-lib\python-3.14.8-embed-amd64\python.exe -m pip --version
-```
-
-配置文件位于 `lib/python-3.14.8-embed-amd64/pip.ini`。
-
-## SysDroid 桌面程序
-
-启动桌面界面：
-
-```bat
+:: 运行（或直接双击 start_sysdroid.bat）
 lib\python-3.14.8-embed-amd64\python.exe -s sysdroid.py
-```
 
-也可以直接双击项目根目录下的 `start_sysdroid.bat` 启动。脚本会自动定位嵌入式 Python 和应用入口，并在启动文件缺失时给出错误提示。
-
-根目录的 `sysdroid.py` 只是启动器：把 `src/` 加入 `sys.path` 后调用 `sysdroid.app.main()`。应用代码位于 `src/sysdroid/`（结构见下）。
-
-### 代码结构
-
-```text
-sysdroid.py                 # 源码启动器（供 bat 和 README 命令使用；EXE 从 src/sysdroid/__main__.py 启动）
-start_sysdroid.bat          # 双击启动
-SysDroid.spec               # PyInstaller 配置（EXE 图标与版本信息）
-assets/                     # SysDroid.ico、icons/sysdroid-<尺寸>.png；icon-src/ 为 SVG 源与生成脚本
-src/sysdroid/
-├─ app.py                   # main()：创建 QApplication、主题和主窗口
-├─ app_info.py              # 名称与版本
-├─ runtime_paths.py         # 自带 ADB / Scrcpy / Terminal 路径解析
-├─ core/                    # 不含界面的设备逻辑：backend（任务执行）、apks、commands、device_info（设备状态与无线调试）、devices、processes、props、settings、users
-└─ ui/                      # main_window、theme、kit（通用控件）、tables（通用表格交互）、task_panel
-   └─ pages/                # 每个导航页一个模块
-scripts/                    # build_sysdroid.py、portable_assets.py（构建与便携资源）
-docs/design/                # 设计文档与 HTML 布局原型
-tests/                      # core/、ui/、packaging/
-```
-
-桌面 Qt 程序提供“设备连接、ADB 命令库、系统属性、系统设置、应用包信息、进程监控、投屏与录屏、任务输出”八个页面。左侧按“设备工具 / 运行记录”分组；名称侧重实际用途，悬停可查看说明。“系统属性”对应 getprop / setprop，“系统设置”对应 Settings 名称空间，“应用包信息”查看、安装、管理与导出 APK，“投屏与录屏”使用 Scrcpy 独立窗口。使用 `windows11` 原生样式及浅色界面，页面标题与说明位于菜单所在顶行。
-
-导航使用统一线条图标：手机、命令终端、键值列表、齿轮、安装包、监控曲线、播放屏幕和输出文档。图标由 Qt 本地绘制并缓存，提供多倍像素与选中态配色，不依赖外部图标文件；左侧导航、“视图”菜单和相关工具栏入口共用名称与图标。
-
-应用图标是“液态玻璃”风格的机器人头像，面部为发绿光的 `>_` 终端屏幕，底板为品牌蓝 #2878b5。`assets/icons/` 中 16–256 px 的 PNG 组成窗口与任务栏图标（16 / 24 px 为简化版），`assets/SysDroid.ico` 嵌入 EXE；进程启动时设置 AppUserModelID `cschengliang.SysDroid`，源码运行时任务栏也按 SysDroid 归组。修改图标请编辑 `assets/icon-src/make_icon.py` 后重新生成（需 `resvg_py` 与 Pillow，仅用于生成，不属于运行或构建依赖）。
-
-### 通用表格交互
-
-属性、Settings、APK、进程、命令库 / 命令管理 / 执行历史、设备列表和活动任务表格使用同一套交互（`ui/tables.py`）：
-
-- 右键菜单先列出本页操作（如读取、复制原始值、结束进程、查看输出），再提供“复制单元格”“复制行”“导出 CSV…”。
-- `Ctrl+C` 以制表符分隔复制所选整行（单元格内的换行和制表符替换为空格）；导出 CSV 为 UTF-8（带 BOM，便于 Excel），只导出当前可见的行列及排序结果，属性 / Settings 导出原始值而不是“（空值）”等显示文本，勾选列导出为“是 / 否”。
-- `F5` 刷新当前页列表（等同点击该页刷新按钮，按钮禁用时不执行），`Ctrl+F` 聚焦当前页搜索框；焦点在底栏任务面板时作用于任务筛选或输出查找。快捷键由主窗口统一分发，页面不重复注册。
-- APK、进程列表可排序；依赖行号增量更新的表格（属性、Settings、任务等）保持固定顺序。
-
-### 自带 Scrcpy 与 ADB
-
-Scrcpy 固定使用应用目录下 `tool/scrcpy-win64-v5.0/scrcpy.exe`（5.0）：源码取仓库根目录，便携版取 EXE 所在目录，不依赖当前工作目录、系统 PATH 或 `SCRCPY` 环境变量。请保留同目录的 `scrcpy-server` 和全部 DLL；缺失自带程序显示具体路径错误，不回退到外部 Scrcpy。
-
-ADB 默认仅使用应用自带的 `tool/scrcpy-win64-v5.0/adb.exe`，不查 PATH 或 adbutils 内置版本。显式覆盖依次采用 `ADB`、`ADBUTILS_ADB_PATH`，可以填写可执行文件路径或 PATH 可解析的名称；两个变量指向不同文件时明确报冲突，所选路径缺失时不回退。例如 CMD：
-
-```bat
-set "ADB=D:\Tools\platform-tools\adb.exe"
-set "ADBUTILS_ADB_PATH=%ADB%"
-start_sysdroid.bat
-```
-
-上述 ADB 路径是示例，需替换为实际安装位置。启动校验后将同一绝对路径用于 adbutils 自动启动 Server、命令预览、安装输运、Scrcpy 与独立 Terminal。保留 `ANDROID_ADB_SERVER_HOST` / `ANDROID_ADB_SERVER_PORT` 配置。配置失败不查询设备，日志保留可复制错误并禁用 ADB 入口，命令库本地浏览 / 编辑仍可用。源码启动使用 `-s`，不加载用户级 site-packages，也不修改开发环境的 `._pth`。
-
-### ADB 设备与任务
-
-- “设备连接”页从上到下依次为“当前设备 / ADB 连接”、“ADB 特权状态 / 快捷操作”和设备列表；主页仅在特权状态区域保留一个“ADB Root”按钮。窗口高度不足时可滚动查看设备列表。
-- 自动执行 `adb devices -l`，展示真实 Serial、状态、型号、Product、Device 和 Transport；表格双击或右键设置全局设备，支持复制 Serial。顶部设备选择器显示“型号 (Serial) · 状态”（型号未知时只显示 Serial），悬停查看 Product / Transport。
-- 通过 ADB Server 的 `host:track-devices` 实时跟踪插拔与状态变化并自动刷新列表（自动刷新不进入任务列表和日志）；跟踪不会主动启动 Server，Server 停止后每隔几秒重试。
-- 当前设备从列表消失时保持选中并标记为“已断开”，不会自动切换到其他设备；设备重新上线后各页面自动恢复。选中在线设备（或当前设备重新上线）时自动读取特权状态，失败会在状态卡片和日志中明确显示。
-- 设备命令通过 Python `adbutils` 连接 ADB Server 执行，不再为每条设备命令创建 `adb` 子进程；支持无线连接/断开、Root、Remount、Shell、文件传输和应用管理。Shell / logcat 直接使用 shell v2 协议边执行边显示 stdout/stderr，保留退出码；不支持 shell v2 的旧设备回退到退出码标记。`exec-out` 按原始字节读取：文本直接显示，二进制输出（PNG、含 NUL 等）保存到数据目录 `exec-out\` 下并显示路径。connect、Root、Remount、卸载等只返回文本的服务按已知成功回复判定成功/失败。
-服务器版本查询 / 启动及 `install` / `install-multiple` 使用已选定的绝对 ADB 可执行文件；安装路径是独立 argv，不使用 adbutils 隐式卸载重装的安装器，不重试、下载 URL、自动降级或授予权限。安装输出实时显示，停止时结束 adb 进程。超时保留已收到的两路输出，不代表设备端动作已经撤销。其余设备协议操作使用 adbutils；创建客户端前再次校验统一路径，禁止偷偷选择其他 ADB。
-- 无线连接与断开、Server 启动/重启、版本查询、Root、Remount、重启设备（系统 / Recovery / Bootloader）均执行真实 ADB。Root/Remount/重启与 Server 重启前需确认；Root 与重启系统后会等待设备重新上线（分别最长 30 / 180 秒）再读取状态，超时会提示；Remount 提示需要重启时会在日志中说明；USB 设备不能通过 `adb disconnect` 断开；缺失 `ADB` 可执行文件或设备离线会显示真实错误。
-- 特权状态读取设备 UID、`ro.debuggable`、Android 版本和系统挂载信息，不自动提权或修改设备。同一次 `adb shell` 调用还读取电量（百分比、充电状态、供电方式、温度）、分辨率（物理 / 覆盖）、主 ABI（悬停查看全部 ABI）、SELinux 模式、IPv4 地址和构建指纹，显示在设备卡片中；某项命令不可用时只显示“—”。
-- 无线调试（Android 11+）：“配对码配对…”输入“使用配对码配对设备”中的 IP:端口和 6 位配对码，执行 `adb pair`；配对端口与连接端口不同，成功后自动填入主机地址，请补上无线调试页面显示的连接端口后点击“连接”。配对码为一次性数据，但会作为命令参数出现在任务列表中。“发现设备”执行 `adb mdns services`，选择连接服务直接 `adb connect`，选择配对服务打开配对对话框；adb 不支持 mDNS 或未发现服务时给出提示。
-- “设备连接”页的“打开终端”、工具菜单“打开内置 ADB 终端”和工具栏“ADB 终端”统一启动项目内的 `tool/terminal-1.25.2733.0/WindowsTerminal.exe`，在独立窗口中运行当前在线设备的交互式 `adb -s <Serial> shell`。终端路径相对项目定位，不依赖系统安装的 Windows Terminal、PATH 中的 `wt.exe` 或本地 PowerShell；交互式连接仍需上述 ADB 可执行文件。未选在线设备、内置终端缺失或 ADB 路径无效时显示错误，不回退到外部终端。
-- 交互式终端会话独立于工具箱，不纳入活动任务或历史；切换全局设备不改变已打开终端的目标。输入 `exit` 或关闭终端窗口结束会话。
-活动日志支持级别筛选、自动滚动、清空和收起。设备功能页查看输出时保留当前列表 / 编辑器，仅切换底栏；“任务输出”导航可独立占满工作区，展示 ADB、Scrcpy 等任务的输出，而非仅 ADB 原文。底栏拖动比例保存于工作区，日志收起状态不再由高度推断。
-- 活动任务每行只含文本单元格（不再为每行创建 3 个按钮）；停止、强制结束和查看输出作用于所选任务，可在工具栏或右键菜单操作，右键还可复制命令。可按状态（进行中 / 成功 / 失败或超时 / 已停止）、类型（ADB 请求 / 本地进程）和命令 / 设备文字筛选。
-- 当前会话最多保留 100 条已结束的非临时任务，超出时自动移除最早结束的任务（正在查看输出的任务除外）；执行历史不受影响。
-- 任务输出支持查找（Enter / Shift+Enter 或“下一个 / 上一个”，跨 stdout / stderr 循环）、“自动换行”开关（默认不换行）和“保存到文件…”（包含命令、状态、退出码及两路输出）。
-- stdout 与 stderr 分开展示，记录真实状态、耗时与退出码；普通进程支持停止、确认后的强制结束和复制输出，停止后 4 秒仍不退出将强制结束，并在 stderr 说明风险；正在写入的文件可能不完整。Shell / exec-out / logcat 与 adb.exe 子进程（安装等）在停止或超时时立即关闭连接或结束进程，已收到的输出保留；push / pull 等其他 adbutils 请求无法中途中断，会等待请求返回后记录最终状态。
-
-### 命令库与执行历史
-
-- 命令库、创建/编辑命令、命令管理、执行历史和工作流五个标签；支持搜索、分类、收藏、新建、编辑、复制和删除。
-- 创建 / 编辑页将模板参数、显示范围、执行类型和参数规则集中在“填写说明”分组；标题与说明顶部对齐，按内容高度排列，不拉大段落间距。长文本自动换行，小窗口可滚动查看，参数和 Root 提示随输入更新。
-- 双击命令、执行所选或 `Ctrl+K` 打开参数与 PowerShell 命令预览；填写各个 `{变量名}` 后提交。设备模式固定当前 Serial，Server 模式不添加 `-s`；模板不能覆盖全局设备选择。
-- 模板只接受 `adb` / `adb.exe`，不调用电脑上的 Shell。单/双引号分组参数；反斜杠原样保留，组内双写引号表示字面引号。普通参数作为数据传入，不需要自行加引号，包含空格、单引号、`$` 或分号也不会新建本地 argv 参数。
-- 普通设备端 Shell 参数会逐项引用，避免被 Android Shell 拆分。完整远程脚本请明确使用 `adb shell {command}`；其参数允许管道、重定向和多条设备命令，必须勾选确认。目标程序自身仍可解释脚本、选项或执行破坏性操作，请检查预览。
-- “需要 Root”是命令注释，执行前再次确认；不代表权限已经检测或自动获得，不会隐式执行 `adb root` / `su`。
-- 执行对话框会自动填入每条命令上次提交的参数值（保存在数据目录 `command_params.json`，最多 200 条命令，与命令库分开保存；写入失败不影响执行）。远程 Shell 脚本仍需每次勾选确认。
-- 无参数、未标记 Root 且非远程脚本的简单命令可用“直接执行”按钮或右键“直接执行”跳过预览，立即按与预览相同的 argv 执行；其他命令仍打开参数预览。
-- “工作流”标签管理已保存的工作流：新建、重命名、删除，添加 / 上移 / 下移 / 移除步骤（可引用命令库中隐藏的命令）。“运行工作流…”在一个对话框中填写所有步骤的参数并预览，提交时固定当前设备，然后逐步执行；任一步失败、非零退出、超时或点击“停止工作流”后，后续步骤不再执行。新建或恢复默认命令库不会创建默认工作流。
-- 命令管理页的“导出 JSON…”导出全部命令和工作流；“导入 JSON…”按与 `commands.json` 相同的版本迁移和校验合并，一次原子保存。同 ID 但内容不同的命令会询问覆盖或保留现有命令；任一记录无效时命令库不变。
-- 历史来自真实任务，点击历史记录可查看输出；右键可查看输出或复制命令。“清空历史”经确认后删除所有已结束的 ADB 历史并立即持久化；取消确认或保存失败不会删除记录，失败会显示具体错误。运行中的任务、当前会话任务输出和其他类型的任务历史保留；正在运行的任务结束后会产生新的历史记录。没有已结束的 ADB 历史时按钮禁用。“活动任务”中的“清除已结束”仍不会删除历史。
-
-#### 命令管理与显示设置
-
-- “命令管理”替代原“预置命令”页，列出全部已保存命令；可搜索名称、描述、标签或模板，并新建、编辑、复制或删除。命令库中的“管理命令”按钮可跳转到管理页。
-- 每条命令保存布尔字段 `show_in_library`。管理表格中的“在命令库显示”勾选框立即保存并更新命令库；创建 / 编辑页也可设置。复制命令保留显示设置和执行类型。
-- 命令库和单命令快速选择仅列出勾选的命令。全部隐藏时不会自动恢复默认命令，快速执行会提示到管理页开启显示；搜索、分类、执行类型和收藏筛选仍独立生效。
-- 取消显示不是删除或权限控制。隐藏命令仍可在管理页编辑、复制、删除，执行前需重新开启显示；显示切换不会取消已提交的任务，也不改写工作流中的引用。真正删除仍需确认，并同时移除工作流中引用它的步骤。
-- 版本 1 / 2 的 `commands.json` 在读取时原子迁移为版本 3：缺少显示字段的已有命令默认显示，已有显式显示设置、内容、ID、收藏和工作流顺序均保留。无法保存时保留原文件并进入只读状态；日常显示切换保存失败时恢复勾选状态并显示错误。
-- 原来的 Android 版本、屏幕分辨率、存储空间和日志快照四条模板纳入管理页，默认隐藏；迁移时按已有 ID 或完全相同的模板去重。版本 3 重载不重复加入这些命令，删除后也不会重新出现。
-
-
-#### 命令执行类型
-
-每条命令独立保存 `execution_type`，与“设备 / Shell / 应用 / 系统 / 文件”等功能分类、设备 / Server 模式、权限和超时分开。执行类型不包含交互会话；已有独立终端入口不变。
-
-| 类型 | 保存值 | 含义与示例 |
-| --- | --- | --- |
-| 短时一次性 | `quick` | 有明确终点，预期很快完成，例如设备列表、系统属性、应用列表、屏幕截图和日志快照 |
-| 长时一次性 | `long` | 有明确终点但可能较慢，例如安装、文件传输；无法静态确定行为的通用 Shell 模板也先归入此类 |
-| 持续运行 | `continuous` | 通常持续执行，等待用户停止，例如不带结束条件的 logcat、ping、top |
-| 条件等待 | `wait` | 等待条件满足后返回，例如 wait-for-device；设备可用不等于 Android 系统启动完成 |
-
-- 命令表格新增“执行类型”列和类型筛选，可与功能分类、搜索和收藏筛选组合使用；创建 / 编辑命令时可以选择类型。
-- 命令管理表格、所选命令摘要及单命令参数预览显示类型。复制命令保留原类型。
-- 默认设备列表、应用列表、系统属性和截图为短时一次性；通用 `adb shell {command}` 为长时一次性。原来的四条模板均有明确终点，归为短时一次性，其中 `adb logcat -d -t 100` 是日志快照，不是持续监听。
-- 迁移版本 1 时仅对缺少类型的简单可识别模板进行推断；未知、动态或复合 Shell 脚本保守标为长时一次性，应按实际脚本手动调整。版本 2 已保存的类型及用户手动选择不会在迁移、重新加载或修改模板时被自动覆盖。
-- 当前类型只用于分类和后续处理的依据，不改变执行参数、超时、停止策略或输出方式，也不新增后端尚不支持的 ADB 子命令。持续运行和条件等待仍遵循原有配置的超时；类型标签不保证实际耗时。
-- 历史记录保留原任务信息，不根据后来修改的命令类型重新标记历史任务。
-
-
-### 系统属性（Prop）
-
-- 左侧导航及“视图”菜单提供独立的“系统属性”页面，与全局设备选择器同步。首次激活在线页面才执行真实 `getprop`，也可手动刷新；未打开页面不发业务查询，同一设备重复激活不重复加载。按属性名称或值搜索，列表显示当前值及前缀类型，150 ms 防抖与增量更新保留选中项及编辑内容。
-- 选择列表项后加载编辑器；也可输入名称读取或新增属性。“当前值”是设备快照，“拟写入值”单独编辑。空字符串、纯空白和属性不存在分别展示；刷新或筛选不会擅自覆盖拟写入内容。
-- 前缀类型可从顶部下拉框或点击“前缀类型 ▾”表头筛选：全部、`ro.*`（通常只读）、`persist.*`（持久化前缀）、其他（普通属性）；与名称 / 值搜索组合，不改变设备数据、选中属性或拟写入值。
-- 表格首次加载按内容设置有上限的紧凑列宽，当前值列不再强制撑满；扩大窗口、关闭 / 弹出编辑区不会拉开各列。列宽仍可拖动，筛选与刷新保留手动调整；长名称和值通过省略号、全文提示及读取 / 编辑区查看，窄窗口支持横向滚动。
-- 读取 / 编辑区可通过顶部“关闭编辑区 / 显示编辑区”隐藏或恢复（已移除弹出窗口）；名称、当前值和未提交草稿不因此清空，恢复时保留分隔比例。
-- 右键属性可重新读取、复制名称、复制原始值或复制设备端 `setprop` 命令，并可导出 CSV。
-- “快照对比”菜单：把当前快照记录为基线、保存当前快照为 JSON、从文件加载基线（本工具保存的 JSON，或 `adb shell getprop` 的原始输出），再“与基线对比”列出新增 / 删除 / 变化的属性（可排序、导出 CSV）。当前值来自最近一次刷新及之后的单项读取 / 写入。
-- “确认写入”使用 `setprop`，默认确认项为“否”；确认中明确显示已捕获的 Serial、名称、旧值与拟写入值。空格、引号、Unicode、Shell 元字符和换行作为数据引用，不作为设备端脚本执行。空值表示写入空字符串，不是删除属性；页面不提供伪装成删除的操作。
-- “读取当前值”和写入后的校验只读取目标属性：同一次请求执行 `getprop 名称`，并统计 `getprop` 列表中 `[名称]: [` 记录以区分空值与不存在，只更新该条目，不再整表重新拉取。设备缺少 `grep` 时空值无法判断是否存在，会明确报错而不是猜测。写入命令成功后在同一设备读取，只有属性存在且实际值与请求完全相同才显示写入成功。不一致时展示读回的真实值；权限、长度、类型、只读限制或读回失败显示真实错误，原始 stdout/stderr 和退出码可通过“任务输出”查看。
-- 操作期间禁用读写与编辑，防止并发覆盖。设备或任务状态在确认期间变化会阻止提交；切换设备会清除旧列表和编辑器，旧设备晚到的结果不会覆盖新设备。切换设备不撤销已经提交给旧设备的写入请求。
-- `ro.*` 通常只读，`persist.*` 为持久化前缀，前缀不保证写入权限或持久化效果。属性可能影响系统服务；本页不自动执行 Root / `su`，不使用 `resetprop`，也不修改 `build.prop`。
-
-### 系统设置（Settings）
-
-- 支持 `system`、`secure`、`global`；global 明确是设备全局共享设置，不声称按用户隔离。Settings / APK 首次打开时共享一次用户发现（`pm list users`、`am get-current-user`），各页独立选择用户；列表失败不猜 user 0，前台查询失败只从可靠列表回退并说明。
-- `system` / `secure` 按所选 Android 用户访问，`global` 为设备共享；这里的用户是系统用户 / 工作资料，不是应用登录账号。用户下拉只列出设备 `pm list users` 实际返回的 ID；只有用户 0 时不会虚构其他用户，设备新增用户后可点击“刷新用户”。
-- 首次打开在线 Settings 页、切换设备 / Android 用户 / namespace 后自动加载名称及全部当前值；同一已加载上下文重复进入不重复查询。“刷新名称和值”重新读取整张列表，搜索可直接匹配值，自动读取不覆盖未提交的拟写入内容。
-- 普通值采用 `content query --projection name:value` 批量读取，前后以单独的 `name` 查询核对成员快照；名称、顺序或记录格式不一致时保留错误，不发布未核实的值。含换行或伪记录歧义的项改用带随机边界的精确查询，每批最多 4 项、逐项核对读前 / 读后存在性，只去掉协议末尾一个 LF，保留值自身空白 / CR / LF。写入 / 删除使用 provider 的 `content insert` / `delete`，名称和值通过有类型绑定传输；字面 `--user` 不再被 settings CLI 重解释为选项。
-- 拟写入值默认按原文输入（留空即空字符串，换行按 LF 提交）；勾选“JSON 转义模式”后以 JSON 字符串编辑，空字符串为 `""`，CR、NBSP 与 Unicode 分隔符可用转义精确表示，无效 JSON 禁止写入。值含 CR 或 U+2028 / U+2029（纯文本无法原样往返）时自动切换到 JSON 模式且不能切回纯文本；切换模式保留最后一个有效值。
-- 单项读取是一次 ADB 请求（同一脚本内读前 / 读值 / 读后核对）；写入 / 删除也是一次请求：先执行 `content insert` / `delete`，再在同一脚本内完成同样的核对读取（原来分别需要 3 / 4 次往返）。启动失败表示未执行；脚本失败时状态明确为“未确认”。
-- “常用预设”：动画缩放（关闭 / 0.5x / 1x / 2x，同时设置 window / transition / animator 三项 global）、显示触摸操作、指针位置（system，所选用户）、充电时保持唤醒（global `stay_on_while_plugged_in` 7 / 0）。确认框列出全部名称和值，一次请求写入并逐项读回核对；预设的 namespace 与当前浏览的不同时只报告结果，不改当前列表。
-- 右键 Settings 项可读取、复制名称 / 原始值或设备端 `settings put` 命令，并可导出 CSV。
-- 修改 / 删除先读最新目标，再显示默认“否”的确认框；编辑、上下文或任务状态变化均不提交，刷新 / 筛选不覆盖 proposal。
-- 已读取空字符串在列表留白，悬停提示“空字符串（存在）”；加载中尚未取得值的项也留白但提示未读，不把查询失败当空值。右侧读取区和变更确认仍区分未读、不存在、空字符串。AOSP 会把文本 `null` 归一为 SQL null；content 文本接口的 `NULL` 又无法区分 SQL null 与字面 `NULL`，因此明确显示存在但值未确认，不谎报字面保存成功。变更后重新读取，只有确切匹配或确实不存在才报告成功。权限 / 解析 / 校验失败保留真实错误；不自动 Root / su、不 reset namespace、不直接改数据库。停止请求不承诺撤销已发送的设备变更。
-
-### 应用包信息（APK）
-
-- 按 Android 用户列出包名、UID、版本码、系统 / 用户包、启用状态及安装来源；版本名、权限、组件与全部 APK 路径按需读取，未提供字段明确留空。包名搜索使用 150 ms 防抖；刷新保留仍存在的选中包。
-- 顶部操作为“刷新”“安装 APK…”和“导出 APK…”：刷新同步更新 Android 用户与当前用户的包列表，保留仍存在的选中包。`pm help` 每台设备只读一次，之后成员 / 系统 / 禁用 / 详细字段四个 `pm list` 合并为一个带随机标识分段的脚本，一次往返完成；任一段失败或框架损坏都保留旧快照。
-- 安装：文件选择器（多选 = 同一应用的 base + split，走 `install-multiple`）或把 `.apk` 拖入页面；确认对话框可选“允许替换（-r）”与“允许测试包（-t）”，默认 `-R` 拒绝替换。安装走 adb.exe 子进程路径，实时显示最新输出行与进度（输出含 `[ NN%]` 时显示百分比，否则为忙碌条），可“取消安装”结束 adb 进程。只有 `Success` 才算成功，失败不卸载重试。
-- 右键包：查看详情、复制包名、启动、强行停止…、启用 / 禁用…、卸载…、导出 APK…。卸载、禁用、强行停止需确认（显示设备 / 用户 / 包；系统应用卸载只从所选用户移除），确认期间上下文变化则不提交；启用、启动无需确认。卸载 / 启用 / 禁用后重新读取列表确认状态。
-- 双击包名按需加载“基本信息 / 权限与组件 / 原始输出”；基本信息为“字段 / 值”表格（版本、UID / appId、SDK、flags 解读、用户状态、ABI、安装来源与时间、全部 APK 路径），未提供字段标为“设备未提供/未识别”。任务的 stdout / stderr 和退出码仍可通过共用底部任务面板查看。
-- 导出先读取全部 `pm path --user` 路径，每个文件写入独立 `.part` 后再改名；base / split 均导出并显示设备路径到本地文件的对应关系。失败保留 `.part` 与具体错误，切换目标不把旧导出映射附到新目标。
-- 诊断仅匹配独立错误行，不把包名、安装器或 APK 路径中的 `exception` 等普通数据判作失败。共享用户发现提交失败后保留可见错误，不递归自动重试；APK 页点击“刷新”（Settings 页仍为“刷新用户”）或切换设备后可重新尝试。
-- 详情仅取活动 `Packages:` 区段，不混入更新系统应用保留的工厂版本。导出当前拉取被停止 / 超时后不再发起后续 split 请求，已产生的 `.part` 保留并说明。
-
-### 进程监控
-
-- 仅页面可见且设备在线时按所选间隔（1 / 2 / 5 / 10 秒，默认 2 秒，随工作区保存）发起有界快照：同一时间最多一个采样 / 详情请求，上一次未返回时跳过本轮，不使用持续 `top`。“立即采样”可手动刷新。自动请求超时 5 秒，详情 15 秒；隐藏停定时器，返回后的旧代结果丢弃，重新进入重建 CPU 基线。
-- 单脚本读取 `ps`、全局 CPU / uptime / memory，再用三次批量读取代替逐 PID 循环：`cat /proc/[0-9]*/stat`、`grep -H` 过滤的 `status` 行、再一次 `cat .../stat`，前后两次 stat 的 start ticks 不同即判定 PID 复用并丢弃混合字段。设备缺少能力时回退并显示未知，不假定 100 Hz 或 4096 字节页大小。
-- 首次采样探测 `ps` 能力（`-A -o` 列 / `-A` / 无参数）；探测超时或损坏时不锁定猜测的模式，按 2 / 5 / 15 / 30 / 60 秒退避重试（手动采样立即重试）；已选模式连续 3 次 `ps` 失败会重新探测。
-- 解析与 CPU 差值计算在后台线程完成，结果经排队信号回到界面线程，并按设备 / 可见性代次丢弃过期结果；表格按 PID + start ticks 原地增量更新，只在行或搜索词变化时重新筛选。
-- CPU 使用连续可靠快照的进程 ticks 增量除以整机 ticks 增量，不乘核心数；首帧、PID 复用、回退与不可读字段显示未知。每行还提供 RSS、VSS、Swap（`status` 的 `VmSwap`，不是 SwapPss）、线程数、启动时间、运行时长、累计 CPU 时间、内核优先级、Nice、最近运行的逻辑 CPU 核编号及命令行。CPU 时间按设备 `CLK_TCK` 换算，不假定 100 Hz；未知字段显示 `—`，真实零值与负 Nice 保留。排序 / 筛选及增量更新按 PID + start ticks 保持选择。
-- “显示列”可勾选所需信息，并提供显示全部列、恢复默认列和按内容收紧列宽；PID 固定可见，启动 / CPU ticks 默认隐藏。列选择随工作区保存，重开程序后恢复。首次快照按内容设置有上限的紧凑列宽，后续采样不反复调整；可拖动表头手动调宽。长内容省略显示，悬停查看全文及精确数值。
-- 双击进程行（或右键“读取详情”）按需读取原始 cmdline argv、PSS / SwapPss 和 ActivityManager 启动记录；采样进行中时请求排队（只保留最新一个），当前请求返回后立即执行，进程已退出则取消并说明。无可靠身份时不加载。前后核对 PID + start ticks，AM 字段还匹配数值 UID，只读真正记录头下的字段，不把 home / UID / PID 索引中的引用当作重复记录。不从进程名称推测启动原因，RSS 不冒充 PSS。
-- 右键进程：复制 PID / 名称 / 命令行 / 包名，“结束进程（SIGTERM）…”“强制结束进程（SIGKILL）…”及应用进程的“强行停止应用…”（`am force-stop --user`）。均需确认；发送信号前在设备上复核 PID + start ticks，PID 已被复用则不发送。不提权：shell 用户只能结束自身进程，权限不足时提示改用强行停止应用。操作完成后自动补一次采样。
-
-### 投屏与录屏（Scrcpy 独立窗口）
-
-- 四个标签：投屏会话、视频与音频、控制与录制、画面来源与设备。只启动 Scrcpy 原生独立窗口，软件内没有投屏画面、手机示意或画面控制按钮。
-- “目标设备与会话”不再显示程序路径或“检测 ADB / Scrcpy”按钮；程序仍在内部自动检查，启动命令预览保留实际执行路径。
-- 首次进入在线设备的 Scrcpy 页才运行自带程序的 `--serial=<Serial> --list-encoders`，显示支持的视频 / 音频编码；悬停可查看编码器名称、硬件 `(hw)` / 软件 `(sw)` 与别名信息。查询只列能力，不启动投屏或改变配置；列出编码器不保证任意参数可用。
-- 切换设备或设备状态变化使编码缓存失效，页面可见时才重查；相同 Serial / state 的设备刷新只更新型号等元数据。晚到旧目标结果不污染当前目标，隐藏页面不停止已有投屏会话。查询错误和原始结果可在任务输出查看。
-- 均衡/流畅/高清及自定义配置；支持尺寸、帧率、视频码率/编码/缓冲、显示方向，以及音频来源/码率/缓冲。
-- 键鼠控制、剪贴板同步、置顶、全屏、无边框；MP4/MKV 文件选择、投屏并录制或仅录制。默认录制目录为 Windows 视频目录，不默认写入应用目录；显式相对路径仍按当前工作目录解释。关闭音频排除音频参数，仅录制排除显示 / 窗口与控制参数。
-- 启动命令实时更新，可复制为 PowerShell 命令；路径中的空格、单引号与 `$` 保留为字面内容。启动前检查录制路径，覆盖已有文件前确认。
-- 每台设备最多一个会话，不同设备可同时投屏：工具栏的启动 / 停止 / 强制结束作用于当前全局设备，“全部运行中会话”列出所有设备的会话，“停止全部”逐个正常停止。窗口标题为“型号 · Serial”（`--window-title`），便于区分多个窗口；切换设备时状态与原始输出跟随该设备最近一次会话。
-- 会话固定启动时的设备和配置，设置变化仅影响下次启动。恢复默认不改变设备或停止会话。配置（含画质方案）在修改后自动保存到数据目录的 `scrcpy.json`，下次启动恢复；文件损坏或字段类型不符时该项回退默认值。
-- “画面来源与设备”标签按 Scrcpy v5.0 手册提供：视频来源 `--video-source=camera` 与 `--camera-facing=back|front|external`（Android 12+）、显示屏 `--display-id=N`、新建虚拟显示屏 `--new-display[=宽x高][/DPI]`、裁剪 `--crop=宽:高:X:Y`、启动应用 `--start-app=[+][?]包名或名称`、`--turn-screen-off`、`--stay-awake`、`--show-touches` 与 UHID 键盘 `--keyboard=uhid`。互斥组合（摄像头 + 显示屏 ID / 虚拟显示屏 / 裁剪，虚拟显示屏 + 显示屏 ID）在启动前提示；关闭控制（`--no-control`）时 Scrcpy 会拒绝关屏、保持唤醒、显示触摸点和启动应用，因此这些参数自动省略；仅录制模式保留控制，可配合关闭屏幕。
-- 录制默认在文件名后追加“-Serial-年月日-时分秒”（如 `scrcpy-recording-R5CT-20261009-213005.mp4`），重复或多台设备同时录制不会互相覆盖；可在录制设置中关闭，关闭后覆盖已有文件前仍会确认。
-- 原始 stdout/stderr 可在页面或任务面板查看。正常停止用于完成录制封装；强制结束可能损坏文件。音频转发需要 Android 11+，编码器能力与版本兼容性以真实运行输出和本机 `scrcpy --help` 为准。
-- 录制器启动日志不代表已经收到视频帧。若尚未收到视频头就停止，Scrcpy 会报告录制失败；请检查完整录制日志与文件能否播放，不以进程启动或文件存在作为成功依据。
-
-### 数据与验证
-
-用户数据默认保存到 `%LOCALAPPDATA%\SysDroid`：`commands.json`（命令及工作流）、`command_params.json`（各命令上次使用的参数）、`scrcpy.json`（Scrcpy 启动配置）、`history.json`（命令库执行的最近 200 条已结束任务；每路输出只保存最近 64 KiB，写盘合并后在后台线程完成，各页面内部查询不写历史）和 `workspace.ini`（窗口与面板布局、进程表显示列与采样间隔）。可用 `SYSDROID_DATA_DIR` 指定其他目录（旧的 `ANDROID_TOOLBOX_DATA_DIR` 仍作为后备生效）。未指定目录时，首次启动会把旧版 `%LOCALAPPDATA%\AndroidToolbox` 中的数据（`exec-out` 除外）一次性复制到新目录：新目录里已有的文件不覆盖，旧目录保持不变，完成后写入 `.migrated-from-AndroidToolbox.json` 标记；复制失败不写标记，下次启动重试。瞬时采样仍支持超时 / 停止 / 原始输出，但不写历史、不抢 TaskPanel 选择；内存保留最近 20 条已结束采样及当前固定查看的 1 条。每路完整输出为有截断标记的 2 MiB 字符尾部，界面同时限制 5000 文本块与字符数，隐藏输出只标脏，可见时按 50 ms 批量显示。
-
-损坏的命令库不会被静默覆盖，界面会显示只读错误；明确选择恢复后先保留唯一备份，再写默认命令库。历史文件读取失败也会保留原文件并报错，修复文件后重新启动。
-
-行为回归验证：
-
-```bat
+:: 测试
 lib\python-3.14.8-embed-amd64\python.exe -s -m pytest tests -q
-```
 
-真实设备与 Scrcpy 的端到端验证需在桌面程序中执行：刷新设备、运行参数化命令、清空执行历史、启动独立窗口或录制并停止，检查真实输出及录制文件。
-
-## Windows x64 便携发行版
-
-发行包发布在 [GitHub Releases](https://github.com/cschengliang/SysDroid-Win/releases)。
-
-解压 `SysDroid-win-x64.zip` 后，双击完整目录中的 `SysDroid.exe`。不需要安装 Python、Qt、ADB、Scrcpy 或 Windows Terminal；不要只复制 EXE 或删除 `_internal`、`tool`、`licenses`。目标为 Windows 11 x64；USB 驱动仍由用户安装。运行数据默认写入 `%LOCALAPPDATA%\SysDroid`，不会混入发行包。
-
-构建使用当前嵌入式解释器；不修改开发环境的 `python314._pth`，不借用外部 Python，不复制整份 site-packages：
-
-```bat
+:: 构建便携版 → dist\SysDroid-win-x64\ 与 .zip
 lib\python-3.14.8-embed-amd64\python.exe -s scripts\build_sysdroid.py
 ```
 
-- `SysDroid.spec` 使用 windowed / onedir，保留正常依赖 hook；仅移除未使用的 Addons、QML / Quick / WebEngine。实际依赖版本记录于 `requirements-runtime.txt`、`requirements-build.txt` 和 `build-info.json`。
-- 每次构建位于独占的 `build/sysdroid/<UTC-UUID>`。优先从 `python314.zip` 提取标准库字节码供 Analysis 使用；确认为字节码收集失败时才取得严格匹配的 CPython 源码重试，不更换解释器。失败保留日志和阶段目录，不覆盖旧发行版。
-- 官方 Scrcpy / Terminal 归档校验固定 SHA-256；许可证、原始 NOTICE、匹配版本的 Qt / PySide 和 LGPL 依赖源码一并分发。`THIRD-PARTY-NOTICES.txt` 说明可替换的动态链接库和开源许可路径；不声称持有商业 Qt 许可。
-- PE 审计检查完整普通 / delay 导入及按名称 / ordinal 的转发导出，包含架构、导出符号、应用内搜索范围和 Windows 系统组件来源；导入解析上限按文件字节数设置，避免默认 8192 项上限截断大型 Qt 绑定，真实解析错误仍中止构建。VC 不从宿主系统目录补入；供应商自带文件记录实际来源。如确需另取 Microsoft REDIST，必须提供真实许可资格记录，不能以已安装运行库推定再分发资格。
-- 通过审计后生成 `dist/SysDroid-win-x64/` 和 `.zip`；解压 ZIP 后核对完整目录树和逐文件 SHA-256，再提交发行产物。目录内 `SHA256SUMS.txt` 与旁边的 `.files.sha256`、`.zip.sha256` 用于校验；已有产物先保留备份，提交失败执行回滚。
+GitHub Actions 的 [Build portable](.github/workflows/build.yml) 工作流可手动触发构建 Artifact；推送 `v*` 标签时额外发布 Release。实现细节、各页面的行为约定与构建审计见 [开发说明](docs/development.md)。
 
-已完成真实 GUI 的 30 分钟输出 / 页面切换 / 自动采样压力场景：两路输出各有 2 MiB 上限，300 次采样不灌入持久化任务历史，后段私有内存相对预热期增长约 9.54 MiB。该结果来自当前工作站和可牺牲模拟器，不代表任意实体设备、Windows 版本或干净主机均已实测。
+## 项目结构
 
-便携 EXE 已在中文、空格及 `&` / `$` 路径、无关工作目录和仅保留 Windows 系统目录的 PATH 下运行：读取 / 写入 / 删除 Settings、进程采样、APK 列表、Terminal 中的真实 `id` 交互、Scrcpy 独立窗口启停均可用。Qt 平台 / 样式插件、Shiboken、Pillow 与 Python / VC 运行库来自包内；工作站 Windows Defender 注入的 `MpOav.dll` 单独记录，不作为发行依赖。尚未在干净虚拟机或另一台实体主机实测。
+```text
+sysdroid.py / start_sysdroid.bat   # 源码启动器
+SysDroid.spec                      # PyInstaller 配置（EXE 图标与版本信息）
+assets/                            # 应用图标（.ico、多尺寸 PNG 及生成源文件）
+src/sysdroid/
+├─ app.py                          # 程序入口：QApplication、主题、主窗口
+├─ core/                           # 无界面的设备逻辑：任务执行、设备、命令库、属性、Settings、APK、进程
+└─ ui/                             # 主窗口、主题、通用控件与表格、任务面板
+   └─ pages/                       # 每个导航页一个模块
+scripts/                           # 便携版构建与第三方资源
+docs/                              # 开发说明、设计文档、截图
+tests/                             # core / ui / packaging 测试
+```
 
-## HTML 布局原型
+## 许可证
 
-可直接浏览 `docs/design/sysdroid_layout.html` 查看推荐的 Windows 风格布局。原型包含分组导航、设备摘要卡、连接区、设备表格、快捷操作和可折叠活动日志。
+SysDroid 以 [Apache License 2.0](LICENSE) 开源。
 
-HTML 原型已进一步落实布局建议：顶部仅保留高频工具、左侧导航分组、当前设备摘要卡提供快捷操作、设备表格支持双击与右键菜单、日志面板支持级别筛选和自动滚动。
+便携版随附以下第三方组件，许可证与源码获取方式见发行包内的 `licenses/` 和 `THIRD-PARTY-NOTICES.txt`：
 
-主页标题与说明已移动到“文件 / 设备 / 视图 / 工具 / 帮助”菜单所在顶行，设备列表和日志区域不再占用标题行。
-
-ADB 命令库 HTML 界面按参考图采用“上方命令表格 + 下方任务面板”的布局，标题与说明仍位于菜单顶行。
-
-- HTML 原型内部标签仍为命令库、创建/编辑命令、预置命令、工作流、执行历史；Qt 桌面程序已将预置命令替换为命令管理，并移除工作流页面。
-- 命令表格：收藏、名称、分类、模式、命令摘要、最近状态；支持搜索、分类筛选、新建、编辑、复制和删除。
-- 执行所选或 `Ctrl+K` 打开参数预览；每个模板变量分别填写。设备命令使用顶部 Serial，ADB Server 命令不添加 `-s`。
-- 工作流支持添加、排序、移除步骤、保存和顺序预览。
-- 底部固定“活动任务 / 任务输出”，显示命令、设备、状态、已运行时间、退出码与 stdout/stderr；清除已结束任务不会删除历史记录。
-
-HTML 文件仍是静态设计参考：命令和工作流只保存在当前浏览会话，刷新后恢复示例数据；没有真实 ADB 执行、进程停止或强制结束能力。可手动生成明确标注的演示任务验证布局。真实执行和持久化使用上方介绍的 Qt 桌面程序。
-
-Scrcpy 页面可从左侧导航或顶部工具栏打开，内部包含“投屏会话、视频与音频、控制与录制”三个子界面：
-
-- 投屏会话：全局设备上下文、会话状态和均衡/流畅/高清配置；画面由 Scrcpy 独立窗口显示，软件内不嵌入投屏窗口。
-- 视频与音频：最长边、帧率上限、视频码率/编码/缓冲、显示方向、音频来源/码率/缓冲。
-- 控制与录制：键鼠控制、剪贴板同步、置顶/全屏/无边框、MP4/MKV 输出文件、投屏并录制或仅录制。
-- 下方实时生成并可复制 PowerShell 启动命令。设备切换、音频关闭和仅录制模式会同步更新参数；路径中的空格、单引号和 `$` 保留为字面内容。配置仅保存在当前页面，恢复默认不会改变全局设备选择。
-
-HTML Scrcpy 页面仍仅用于设计预览，启动与停止按钮不可用；Qt 桌面程序已接入项目自带的 Scrcpy 5.0，无需另行安装 Scrcpy。页面不提供内嵌画面、画面控制按钮或投屏指标栏。参数兼容性以 `tool/scrcpy-win64-v5.0/scrcpy.exe --help` 为准。选项参考官方[视频](https://github.com/Genymobile/scrcpy/blob/master/doc/video.md)、[音频](https://github.com/Genymobile/scrcpy/blob/master/doc/audio.md)、[控制](https://github.com/Genymobile/scrcpy/blob/master/doc/control.md)、[窗口](https://github.com/Genymobile/scrcpy/blob/master/doc/window.md)和[录制](https://github.com/Genymobile/scrcpy/blob/master/doc/recording.md)文档。
+- [scrcpy](https://github.com/Genymobile/scrcpy) 5.0（含 ADB）— Apache-2.0
+- [Windows Terminal](https://github.com/microsoft/terminal) — MIT
+- [Qt](https://www.qt.io/) / [PySide6](https://doc.qt.io/qtforpython-6/) — LGPL-3.0，以可替换的动态链接库形式分发
